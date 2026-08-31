@@ -1,0 +1,40 @@
+@import url('https://fonts.googleapis.com/css2?family=Caveat:wght@600;700&display=swap');
+
+:root {
+  font: 16px/145% system-ui, 'Segoe UI', Roboto, sans-serif;
+  color: #222;
+  background: #f7f7f7;
+}
+
+body {
+  margin: 0;
+}
+
+#root {
+  width: 100%;
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  text-align: left;
+}
+
+h1,
+h2 {
+  font-weight: 700;
+  color: #1b1b1b;
+}
+
+h1 {
+  font-size: 1.8rem;
+  margin: 16px 0;
+}
+
+h2 {
+  font-size: 1.3rem;
+  margin: 0 0 8px;
+}
+
+p {
+  margin: 0;
+}
