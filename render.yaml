@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: house-of-shrish-api
+    runtime: node
+    rootDir: server
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: ADMIN_KEY
+        sync: false
