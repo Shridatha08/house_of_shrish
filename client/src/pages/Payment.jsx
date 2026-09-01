@@ -4,12 +4,14 @@ import { QRCodeSVG } from 'qrcode.react';
 import { markOrderPaid } from '../api';
 import { useCart } from '../context/CartContext';
 
+const WHATSAPP_LINK = 'https://wa.me/+919180381854';
+
 export default function Payment() {
   const { id } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
   const { clearCart } = useCart();
-  const [confirmed, setConfirmed] = useState(false);
+  const [stage, setStage] = useState('paying'); // 'paying' | 'awaiting-proof' | 'confirmed'
   const [error, setError] = useState('');
 
   const { order, upiUri } = location.state || {};
@@ -28,14 +30,14 @@ export default function Payment() {
   async function handleConfirmPaid() {
     try {
       await markOrderPaid(id);
-      setConfirmed(true);
+      setStage('awaiting-proof');
       clearCart();
     } catch (err) {
       setError(err.message);
     }
   }
 
-  if (confirmed) {
+  if (stage === 'confirmed') {
     return (
       <div className="payment-page">
         <div className="success-card">
@@ -43,6 +45,21 @@ export default function Payment() {
           <p>Order #{order.orderNumber || order.id} for ₹{order.total} has been placed.</p>
           <Link to={`/invoice/${order.id}`} className="btn-link">View Invoice</Link>
           <button className="btn-primary" onClick={() => navigate('/')}>Back to menu</button>
+        </div>
+      </div>
+    );
+  }
+
+  if (stage === 'awaiting-proof') {
+    return (
+      <div className="payment-page">
+        <div className="success-card">
+          <h2>Almost done!</h2>
+          <p className="status-text">
+            Please <a href={WHATSAPP_LINK} target="_blank" rel="noopener noreferrer">click here</a> and share your
+            payment screenshot along with your name to confirm your order.
+          </p>
+          <button className="btn-primary" onClick={() => setStage('confirmed')}>Continue</button>
         </div>
       </div>
     );
@@ -63,3 +80,4 @@ export default function Payment() {
     </div>
   );
 }
+
