@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { updateProfile } from '../api';
+import { updateProfile, getMySubscriptions } from '../api';
 
 export default function Profile() {
   const { user, token, ready, updateUser } = useAuth();
@@ -12,6 +12,14 @@ export default function Profile() {
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  const [subscriptions, setSubscriptions] = useState([]);
+
+  useEffect(() => {
+    if (user) {
+      getMySubscriptions(token).then(setSubscriptions).catch(() => setSubscriptions([]));
+    }
+  }, [user, token]);
 
   if (ready && !user) {
     return <Navigate to="/login?redirect=/profile" replace />;
@@ -65,6 +73,38 @@ export default function Profile() {
             {submitting ? 'Saving…' : 'Save Changes'}
           </button>
         </form>
+
+        {subscriptions.length > 0 && (
+          <div className="profile-subscriptions">
+            <h2>My Monthly Subscriptions</h2>
+            {subscriptions.map((sub) => (
+              <div key={sub.id} className="subscription-summary-card">
+                <div className="subscription-summary-header">
+                  <strong>{sub.itemName}</strong>
+                  <span
+                    className={
+                      sub.expired
+                        ? 'subscription-badge expired'
+                        : sub.expiresToday
+                          ? 'subscription-badge expiring'
+                          : 'subscription-badge active'
+                    }
+                  >
+                    {sub.expired ? 'Expired' : sub.expiresToday ? 'Expires today' : 'Active'}
+                  </span>
+                </div>
+                <p className="subscription-summary-dates">
+                  {sub.startDate} → {sub.endDate}
+                </p>
+                {!sub.expired && (
+                  <p className="subscription-days-remaining">
+                    {sub.daysRemaining === 0 ? 'Ends today' : `${sub.daysRemaining} day${sub.daysRemaining === 1 ? '' : 's'} remaining`}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

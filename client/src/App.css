@@ -726,6 +726,43 @@
   color: #333;
 }
 
+.profile-subscriptions {
+  margin-top: 28px;
+  padding-top: 20px;
+  border-top: 1px solid #eee;
+}
+
+.profile-subscriptions h2 {
+  margin: 0 0 12px;
+}
+
+.subscription-summary-card {
+  border: 1px solid #eee;
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+}
+
+.subscription-summary-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.subscription-summary-dates {
+  font-size: 0.78rem;
+  color: #777;
+  margin: 6px 0 4px;
+}
+
+.subscription-days-remaining {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #e8552d;
+  margin: 0;
+}
+
 .fssai-logo {
   height: 70px;
   width: auto;

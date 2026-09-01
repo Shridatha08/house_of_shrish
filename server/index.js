@@ -263,9 +263,13 @@ app.get('/api/subscriptions/me', async (req, res) => {
     .filter((s) => s.userId === user.id)
     .map((s) => {
       const endDate = computeSubscriptionEndDate(s.startDate, s.workingDaysRequired, db.data.holidays);
+      const daysRemaining = endDate
+        ? Math.max(0, Math.round((new Date(`${endDate}T00:00:00`) - new Date(`${today}T00:00:00`)) / 86400000))
+        : null;
       return {
         ...s,
         endDate,
+        daysRemaining,
         expiresToday: endDate === today,
         expired: Boolean(endDate) && endDate < today
       };
