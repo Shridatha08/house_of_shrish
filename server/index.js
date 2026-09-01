@@ -72,6 +72,20 @@ function computeSubscriptionEndDate(startDate, requiredWorkingDays, holidays) {
   return null;
 }
 
+// Counts remaining working days (meal-delivery days) from `today` through `endDate`, inclusive.
+function countWorkingDaysRemaining(today, endDate, holidays) {
+  if (!endDate || endDate < today) return 0;
+  let count = 0;
+  const cursor = new Date(`${today}T00:00:00`);
+  const end = new Date(`${endDate}T00:00:00`);
+  while (cursor <= end) {
+    const dateStr = cursor.toISOString().slice(0, 10);
+    if (isWorkingDay(dateStr, holidays)) count++;
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return count;
+}
+
 // POST /api/auth/register - create a new account
 app.post('/api/auth/register', async (req, res) => {
   const { name, phone, password, address } = req.body || {};
@@ -263,9 +277,7 @@ app.get('/api/subscriptions/me', async (req, res) => {
     .filter((s) => s.userId === user.id)
     .map((s) => {
       const endDate = computeSubscriptionEndDate(s.startDate, s.workingDaysRequired, db.data.holidays);
-      const daysRemaining = endDate
-        ? Math.max(0, Math.round((new Date(`${endDate}T00:00:00`) - new Date(`${today}T00:00:00`)) / 86400000))
-        : null;
+      const daysRemaining = countWorkingDaysRemaining(today, endDate, db.data.holidays);
       return {
         ...s,
         endDate,
