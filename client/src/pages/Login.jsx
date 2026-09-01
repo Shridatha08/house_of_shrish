@@ -12,6 +12,7 @@ export default function Login() {
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [address, setAddress] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -19,6 +20,10 @@ export default function Login() {
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
+    if (mode === 'register' && password !== confirmPassword) {
+      setError('Passwords do not match.');
+      return;
+    }
     setSubmitting(true);
     try {
       if (mode === 'register') {
@@ -89,6 +94,18 @@ export default function Login() {
               required
             />
           </label>
+          {mode === 'register' && (
+            <label>
+              Confirm password
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                minLength={6}
+                required
+              />
+            </label>
+          )}
 
           {error && <p className="status-text error">{error}</p>}
 

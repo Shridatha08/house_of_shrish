@@ -1,9 +1,4 @@
-import { JSONFilePreset } from 'lowdb/node';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const dbFile = path.join(__dirname, 'data.json');
+import { MongoClient } from 'mongodb';
 
 const MEAL_CUSTOMISATIONS = [
   '2 Roti, Vegetable curry, Flavourful rice, Curd, Vegetable/Fruit Salad',
@@ -35,8 +30,39 @@ const defaultData = {
   ]
 };
 
+const MONGODB_URI = process.env.MONGODB_URI;
+const MONGODB_DB_NAME = process.env.MONGODB_DB_NAME || 'house_of_shrish';
 
+let clientPromise;
+
+// Reuses a single MongoDB connection across requests instead of reconnecting each time.
+function getClient() {
+  if (!MONGODB_URI) {
+    throw new Error('MONGODB_URI environment variable is not set.');
+  }
+  if (!clientPromise) {
+    clientPromise = new MongoClient(MONGODB_URI).connect();
+  }
+  return clientPromise;
+}
+
+// Returns a lowdb-like object: { data, write() } backed by a single MongoDB document,
+// so existing route handlers (db.data.menu, db.data.orders, etc.) don't need to change.
 export async function getDb() {
-  const db = await JSONFilePreset(dbFile, defaultData);
-  return db;
+  const client = await getClient();
+  const collection = client.db(MONGODB_DB_NAME).collection('appData');
+
+  let doc = await collection.findOne({ _id: 'main' });
+  if (!doc) {
+    doc = { _id: 'main', ...structuredClone(defaultData) };
+    await collection.insertOne(doc);
+  }
+
+  return {
+    data: doc,
+    async write() {
+      const { _id, ...rest } = doc;
+      await collection.updateOne({ _id: 'main' }, { $set: rest }, { upsert: true });
+    }
+  };
 }
