@@ -12,15 +12,11 @@ const MERCHANT_NAME = 'House of Shrish';
 // Demo-only shared secret for holiday admin actions; replace with real admin auth in production.
 const ADMIN_KEY = process.env.ADMIN_KEY || 'shrish-admin-2026';
 
-// Demo business details for GST invoices. Replace GSTIN with your real registration number.
+// Demo business details shown on invoices.
 const BUSINESS = {
   name: 'House of Shrish',
-  gstin: '29AAAAA0000A1Z5',
   address: 'Bengaluru, Karnataka, India'
 };
-// Menu prices are treated as GST-inclusive; 5% GST (2.5% CGST + 2.5% SGST) is typical for
-// non-AC restaurants without input tax credit. Adjust if your registration differs.
-const GST_RATE = 0.05;
 
 function pad(n, len = 2) {
   return String(n).padStart(len, '0');
@@ -444,34 +440,21 @@ app.patch('/api/orders/:id/mark-paid', async (req, res) => {
   res.json(order);
 });
 
-// GET /api/orders/:id/invoice - GST invoice breakdown for a paid order
+// GET /api/orders/:id/invoice - invoice breakdown for a paid order
 app.get('/api/orders/:id/invoice', async (req, res) => {
   const db = await getDb();
   const order = db.data.orders.find((o) => o.id === Number(req.params.id));
   if (!order) return res.status(404).json({ error: 'Order not found.' });
 
-  const taxableValue = Math.round((order.total / (1 + GST_RATE)) * 100) / 100;
-  const totalTax = Math.round((order.total - taxableValue) * 100) / 100;
-  const cgst = Math.round((totalTax / 2) * 100) / 100;
-  const sgst = totalTax - cgst;
-
-  const items = order.items.map((item) => {
-    const lineTotal = item.price * item.quantity;
-    const lineTaxable = Math.round((lineTotal / (1 + GST_RATE)) * 100) / 100;
-    return { ...item, lineTotal, lineTaxable, lineTax: Math.round((lineTotal - lineTaxable) * 100) / 100 };
-  });
+  const items = order.items.map((item) => ({ ...item, lineTotal: item.price * item.quantity }));
 
   res.json({
     invoiceNumber: `INV-${order.orderNumber || order.id}`,
     orderNumber: order.orderNumber || String(order.id),
     date: order.createdAt,
     business: BUSINESS,
-    gstRate: GST_RATE,
     customer: order.customer,
     items,
-    taxableValue,
-    cgst,
-    sgst,
     total: order.total
   });
 });

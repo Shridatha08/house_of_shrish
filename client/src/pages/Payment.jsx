@@ -41,7 +41,7 @@ export default function Payment() {
         <div className="success-card">
           <h2>🎉 Order confirmed!</h2>
           <p>Order #{order.orderNumber || order.id} for ₹{order.total} has been placed.</p>
-          <Link to={`/invoice/${order.id}`} className="btn-link">View GST Invoice</Link>
+          <Link to={`/invoice/${order.id}`} className="btn-link">View Invoice</Link>
           <button className="btn-primary" onClick={() => navigate('/')}>Back to menu</button>
         </div>
       </div>

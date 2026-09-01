@@ -29,7 +29,6 @@ export default function Invoice() {
           <div>
             <h2>{invoice.business.name}</h2>
             <p>{invoice.business.address}</p>
-            <p>GSTIN: {invoice.business.gstin}</p>
           </div>
           <div className="invoice-meta">
             <p><strong>Invoice No:</strong> {invoice.invoiceNumber}</p>
@@ -49,7 +48,6 @@ export default function Invoice() {
             <tr>
               <th>Item</th>
               <th>Qty</th>
-              <th>Taxable (₹)</th>
               <th>Total (₹)</th>
             </tr>
           </thead>
@@ -61,7 +59,6 @@ export default function Invoice() {
                   {item.customisation && <span className="invoice-item-note">{item.customisation}</span>}
                 </td>
                 <td>{item.quantity}</td>
-                <td>{item.lineTaxable.toFixed(2)}</td>
                 <td>{item.lineTotal.toFixed(2)}</td>
               </tr>
             ))}
@@ -69,18 +66,6 @@ export default function Invoice() {
         </table>
 
         <div className="invoice-totals">
-          <div className="invoice-totals-row">
-            <span>Taxable Value</span>
-            <span>₹{invoice.taxableValue.toFixed(2)}</span>
-          </div>
-          <div className="invoice-totals-row">
-            <span>CGST ({(invoice.gstRate / 2 * 100).toFixed(1)}%)</span>
-            <span>₹{invoice.cgst.toFixed(2)}</span>
-          </div>
-          <div className="invoice-totals-row">
-            <span>SGST ({(invoice.gstRate / 2 * 100).toFixed(1)}%)</span>
-            <span>₹{invoice.sgst.toFixed(2)}</span>
-          </div>
           <div className="invoice-totals-row invoice-grand-total">
             <strong>Total</strong>
             <strong>₹{invoice.total.toFixed(2)}</strong>
