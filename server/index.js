@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
@@ -24,9 +25,9 @@ function pad(n, len = 2) {
 
 // Builds an order number like #31082026-01, using a sequence that resets each day.
 function buildOrderNumber(date, dailySequence) {
-  const dd = pad(date.getDate());
-  const mm = pad(date.getMonth() + 1);
-  const yyyy = date.getFullYear();
+  const dd = pad(date.getUTCDate());
+  const mm = pad(date.getUTCMonth() + 1);
+  const yyyy = date.getUTCFullYear();
   return `${dd}${mm}${yyyy}-${pad(dailySequence)}`;
 }
 
@@ -51,8 +52,9 @@ function todayStr() {
 }
 
 // Counts a date as a working day when it isn't a Sunday and isn't an admin-added holiday.
+// Uses UTC throughout so results don't shift depending on the server's local timezone.
 function isWorkingDay(dateStr, holidays) {
-  const dow = new Date(`${dateStr}T00:00:00`).getDay();
+  const dow = new Date(`${dateStr}T00:00:00Z`).getUTCDay();
   if (dow === 0) return false;
   return !holidays.some((h) => h.date === dateStr);
 }
@@ -60,14 +62,14 @@ function isWorkingDay(dateStr, holidays) {
 // Finds the date on which the Nth working day (inclusive of the start date) falls.
 function computeSubscriptionEndDate(startDate, requiredWorkingDays, holidays) {
   let count = 0;
-  const cursor = new Date(`${startDate}T00:00:00`);
+  const cursor = new Date(`${startDate}T00:00:00Z`);
   for (let i = 0; i < requiredWorkingDays * 3; i++) {
     const dateStr = cursor.toISOString().slice(0, 10);
     if (isWorkingDay(dateStr, holidays)) {
       count++;
       if (count === requiredWorkingDays) return dateStr;
     }
-    cursor.setDate(cursor.getDate() + 1);
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
   }
   return null;
 }
@@ -76,12 +78,12 @@ function computeSubscriptionEndDate(startDate, requiredWorkingDays, holidays) {
 function countWorkingDaysRemaining(today, endDate, holidays) {
   if (!endDate || endDate < today) return 0;
   let count = 0;
-  const cursor = new Date(`${today}T00:00:00`);
-  const end = new Date(`${endDate}T00:00:00`);
+  const cursor = new Date(`${today}T00:00:00Z`);
+  const end = new Date(`${endDate}T00:00:00Z`);
   while (cursor <= end) {
     const dateStr = cursor.toISOString().slice(0, 10);
     if (isWorkingDay(dateStr, holidays)) count++;
-    cursor.setDate(cursor.getDate() + 1);
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
   }
   return count;
 }
