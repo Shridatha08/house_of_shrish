@@ -531,6 +531,19 @@
   color: #fff;
 }
 
+.auth-help-text {
+  color: #666;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  margin: 0 0 16px;
+}
+
+.forgot-password-link {
+  align-self: flex-start;
+  margin: 4px 0 14px;
+  padding: 0;
+}
+
 .auth-required-notice {
   background: #fff4e5;
   border: 1px solid #f3d9a4;

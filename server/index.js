@@ -149,6 +149,72 @@ app.post('/api/auth/login', async (req, res) => {
   res.json({ user: publicUser(user), token });
 });
 
+// POST /api/auth/password-reset/verify-phone - exchange a Phone.Email verification URL for a reset token
+app.post('/api/auth/password-reset/verify-phone', async (req, res) => {
+  const { userJsonUrl } = req.body || {};
+  let verificationUrl;
+  try {
+    verificationUrl = new URL(userJsonUrl);
+  } catch {
+    return res.status(400).json({ error: 'A valid Phone.Email verification is required.' });
+  }
+  if (verificationUrl.protocol !== 'https:' || verificationUrl.hostname !== 'user.phone.email') {
+    return res.status(400).json({ error: 'Invalid Phone.Email verification URL.' });
+  }
+
+  let verifiedUser;
+  try {
+    const verificationResponse = await fetch(verificationUrl, { signal: AbortSignal.timeout(10_000) });
+    if (!verificationResponse.ok) throw new Error('Phone.Email verification failed.');
+    verifiedUser = await verificationResponse.json();
+  } catch {
+    return res.status(400).json({ error: 'Phone verification could not be confirmed. Please try again.' });
+  }
+
+  const countryCode = String(verifiedUser.user_country_code || '').replace(/\D/g, '');
+  const phoneNumber = String(verifiedUser.user_phone_number || '').replace(/\D/g, '');
+  const phone = countryCode === '91' && phoneNumber.length === 10 ? phoneNumber : '';
+  if (!phone) {
+    return res.status(400).json({ error: 'Please verify the 10-digit mobile number registered with this account.' });
+  }
+
+  const db = await getDb();
+  const user = db.data.users.find((candidate) => candidate.phone === phone);
+  if (!user) {
+    return res.status(404).json({ error: 'No account is registered with this phone number.' });
+  }
+
+  const now = Date.now();
+  db.data.passwordResetTokens = (db.data.passwordResetTokens || []).filter((entry) => entry.expiresAt > now);
+  const resetToken = crypto.randomBytes(32).toString('hex');
+  db.data.passwordResetTokens.push({ token: resetToken, userId: user.id, expiresAt: now + 10 * 60 * 1000 });
+  await db.write();
+  res.json({ resetToken });
+});
+
+// POST /api/auth/password-reset - set a new password after Phone.Email verification
+app.post('/api/auth/password-reset', async (req, res) => {
+  const { resetToken, password } = req.body || {};
+  if (typeof password !== 'string' || password.length < 6) {
+    return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+  }
+
+  const db = await getDb();
+  const now = Date.now();
+  db.data.passwordResetTokens = (db.data.passwordResetTokens || []).filter((entry) => entry.expiresAt > now);
+  const resetEntry = db.data.passwordResetTokens.find((entry) => entry.token === resetToken);
+  if (!resetEntry) return res.status(400).json({ error: 'This reset link has expired. Verify your phone number again.' });
+
+  const user = db.data.users.find((candidate) => candidate.id === resetEntry.userId);
+  if (!user) return res.status(404).json({ error: 'Account not found.' });
+
+  user.passwordHash = await bcrypt.hash(password, 10);
+  db.data.passwordResetTokens = db.data.passwordResetTokens.filter((entry) => entry.token !== resetToken);
+  db.data.sessions = db.data.sessions.filter((session) => session.userId !== user.id);
+  await db.write();
+  res.status(204).end();
+});
+
 // GET /api/auth/me - fetch the account for the current session token
 app.get('/api/auth/me', async (req, res) => {
   const db = await getDb();

@@ -1,6 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { resetPassword, verifyPasswordResetPhone } from '../api';
+
+const PHONE_EMAIL_SCRIPT = 'https://www.phone.email/sign_in_button_v1.js';
 
 export default function Login() {
   const { login, register } = useAuth();
@@ -16,6 +19,37 @@ export default function Login() {
   const [address, setAddress] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [forgotPassword, setForgotPassword] = useState(false);
+  const [resetToken, setResetToken] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
+
+  useEffect(() => {
+    if (!forgotPassword || resetToken) return undefined;
+
+    window.phoneEmailListener = async (user) => {
+      try {
+        setError('');
+        setSubmitting(true);
+        const result = await verifyPasswordResetPhone(user?.user_json_url);
+        setResetToken(result.resetToken);
+      } catch (err) {
+        setError(err.message);
+      } finally {
+        setSubmitting(false);
+      }
+    };
+
+    const script = document.createElement('script');
+    script.src = PHONE_EMAIL_SCRIPT;
+    script.async = true;
+    document.body.appendChild(script);
+
+    return () => {
+      delete window.phoneEmailListener;
+      script.remove();
+    };
+  }, [forgotPassword, resetToken]);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -39,10 +73,70 @@ export default function Login() {
     }
   }
 
+  async function handleResetPassword(e) {
+    e.preventDefault();
+    setError('');
+    if (newPassword !== confirmNewPassword) {
+      setError('Passwords do not match.');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await resetPassword({ resetToken, password: newPassword });
+      setForgotPassword(false);
+      setResetToken('');
+      setNewPassword('');
+      setConfirmNewPassword('');
+      setPassword('');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  function showForgotPassword() {
+    setForgotPassword(true);
+    setError('');
+  }
+
   return (
     <div className="auth-page">
       <div className="auth-card">
         <Link to="/" className="btn-link back-link">‹ Back to Menu</Link>
+        {forgotPassword ? (
+          <>
+            <h2>Reset password</h2>
+            {!resetToken ? (
+              <>
+                <p className="auth-help-text">Verify the mobile number registered with your account to receive an OTP.</p>
+                {import.meta.env.VITE_PHONE_EMAIL_CLIENT_ID ? (
+                  <div className="pe_signin_button" data-client-id={import.meta.env.VITE_PHONE_EMAIL_CLIENT_ID} />
+                ) : (
+                  <p className="status-text error">Phone verification is not configured yet.</p>
+                )}
+              </>
+            ) : (
+              <form className="checkout-form" onSubmit={handleResetPassword}>
+                <label>
+                  New password
+                  <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} minLength={6} required />
+                </label>
+                <label>
+                  Confirm new password
+                  <input type="password" value={confirmNewPassword} onChange={(e) => setConfirmNewPassword(e.target.value)} minLength={6} required />
+                </label>
+                <button className="btn-primary" type="submit" disabled={submitting}>
+                  {submitting ? 'Please wait...' : 'Set new password'}
+                </button>
+              </form>
+            )}
+            {error && <p className="status-text error">{error}</p>}
+            <button className="btn-link forgot-password-link" type="button" onClick={() => { setForgotPassword(false); setError(''); }}>
+              Back to login
+            </button>
+          </>
+        ) : <>
         <div className="auth-tabs">
           <button
             type="button"
@@ -109,10 +203,17 @@ export default function Login() {
 
           {error && <p className="status-text error">{error}</p>}
 
+          {mode === 'login' && (
+            <button className="btn-link forgot-password-link" type="button" onClick={showForgotPassword}>
+              Forgot Password?
+            </button>
+          )}
+
           <button className="btn-primary" type="submit" disabled={submitting}>
             {submitting ? 'Please wait…' : mode === 'register' ? 'Create account' : 'Log In'}
           </button>
         </form>
+        </>}
       </div>
     </div>
   );

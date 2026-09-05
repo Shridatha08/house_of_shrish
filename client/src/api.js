@@ -34,6 +34,15 @@ export const registerUser = (payload) =>
 export const loginUser = (payload) =>
   request('/api/auth/login', { method: 'POST', body: JSON.stringify(payload) });
 
+export const verifyPasswordResetPhone = (userJsonUrl) =>
+  request('/api/auth/password-reset/verify-phone', {
+    method: 'POST',
+    body: JSON.stringify({ userJsonUrl })
+  });
+
+export const resetPassword = (payload) =>
+  request('/api/auth/password-reset', { method: 'POST', body: JSON.stringify(payload) });
+
 export const updateProfile = (payload, token) =>
   request('/api/auth/profile', { method: 'PATCH', body: JSON.stringify(payload), headers: authHeaders(token) });
 
