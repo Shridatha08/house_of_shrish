@@ -8,7 +8,10 @@ import {
   getAdminSettings,
   updateAdminSettings,
   getAdminSubscriptions,
-  updateAdminSubscription
+  updateAdminSubscription,
+  approveAdminSubscription,
+  getAdminUsers,
+  deleteAdminUser
 } from '../api';
 
 const ADMIN_KEY_STORAGE = 'houseOfShrishAdminKey';
@@ -34,6 +37,11 @@ export default function AdminHolidays() {
   const [subsEdits, setSubsEdits] = useState({}); // { [id]: { startDate, workingDaysRequired } }
   const [subsError, setSubsError] = useState('');
   const [savingSubId, setSavingSubId] = useState(null);
+  const [approvingSubId, setApprovingSubId] = useState(null);
+
+  const [users, setUsers] = useState([]);
+  const [usersError, setUsersError] = useState('');
+  const [removingUserId, setRemovingUserId] = useState(null);
 
   useEffect(() => {
     const saved = sessionStorage.getItem(ADMIN_KEY_STORAGE);
@@ -57,6 +65,7 @@ export default function AdminHolidays() {
         .then((s) => setWorkingDays(String(s.subscriptionWorkingDays)))
         .catch(() => {});
       getAdminSubscriptions(adminKey).then(setSubscriptions).catch(() => setSubscriptions([]));
+      getAdminUsers(adminKey).then(setUsers).catch(() => setUsers([]));
     }
   }, [unlocked, adminKey]);
 
@@ -142,6 +151,32 @@ export default function AdminHolidays() {
       setSubsError(err.message);
     } finally {
       setSavingSubId(null);
+    }
+  }
+
+  async function handleApproveSubscription(sub) {
+    setSubsError('');
+    setApprovingSubId(sub.id);
+    try {
+      const updated = await approveAdminSubscription(sub.id, adminKey);
+      setSubscriptions((prev) => prev.map((s) => (s.id === sub.id ? { ...s, ...updated } : s)));
+    } catch (err) {
+      setSubsError(err.message);
+    } finally {
+      setApprovingSubId(null);
+    }
+  }
+
+  async function handleRemoveUser(user) {
+    setUsersError('');
+    setRemovingUserId(user.id);
+    try {
+      await deleteAdminUser(user.id, adminKey);
+      setUsers((prev) => prev.filter((u) => u.id !== user.id));
+    } catch (err) {
+      setUsersError(err.message);
+    } finally {
+      setRemovingUserId(null);
     }
   }
 
@@ -240,13 +275,31 @@ export default function AdminHolidays() {
                 <span>{sub.customerPhone}</span>
                 <span
                   className={
-                    sub.expiresToday ? 'subscription-badge expiring' : sub.expired ? 'subscription-badge expired' : 'subscription-badge active'
+                    !sub.approved
+                      ? 'subscription-badge pending'
+                      : sub.expiresToday
+                        ? 'subscription-badge expiring'
+                        : sub.expired
+                          ? 'subscription-badge expired'
+                          : 'subscription-badge active'
                   }
                 >
-                  {sub.expiresToday ? 'Expires today' : sub.expired ? 'Expired' : 'Active'}
+                  {!sub.approved ? 'Pending approval' : sub.expiresToday ? 'Expires today' : sub.expired ? 'Expired' : 'Active'}
                 </span>
               </div>
               <p className="subscription-item-name">{sub.itemName}</p>
+
+              {!sub.approved && (
+                <button
+                  type="button"
+                  className="btn-primary"
+                  style={{ marginBottom: 10 }}
+                  onClick={() => handleApproveSubscription(sub)}
+                  disabled={approvingSubId === sub.id}
+                >
+                  {approvingSubId === sub.id ? 'Approving…' : 'Approve Subscription'}
+                </button>
+              )}
 
               <div className="subscription-edit-row">
                 <label>
@@ -280,6 +333,31 @@ export default function AdminHolidays() {
                   {savingSubId === sub.id ? 'Saving…' : 'Save'}
                 </button>
               </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <h2 style={{ marginTop: 32 }}>Registered Users</h2>
+      {usersError && <p className="status-text error">{usersError}</p>}
+      {users.length === 0 ? (
+        <p className="status-text">No registered users yet.</p>
+      ) : (
+        <div className="cart-list">
+          {users.map((u) => (
+            <div key={u.id} className="cart-row">
+              <span className="cart-row-name">
+                {u.name}
+                <span className="cart-row-note">{u.phone}{u.address ? ` · ${u.address}` : ''}</span>
+              </span>
+              <button
+                type="button"
+                className="btn-remove"
+                onClick={() => handleRemoveUser(u)}
+                disabled={removingUserId === u.id}
+              >
+                {removingUserId === u.id ? 'Removing…' : '✕ Remove'}
+              </button>
             </div>
           ))}
         </div>

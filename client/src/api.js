@@ -77,3 +77,15 @@ export const updateAdminSubscription = (id, payload, adminKey) =>
     body: JSON.stringify(payload),
     headers: { 'x-admin-key': adminKey }
   });
+
+export const approveAdminSubscription = (id, adminKey) =>
+  request(`/api/admin/subscriptions/${id}/approve`, {
+    method: 'PATCH',
+    headers: { 'x-admin-key': adminKey }
+  });
+
+export const getAdminUsers = (adminKey) =>
+  request('/api/admin/users', { headers: { 'x-admin-key': adminKey } });
+
+export const deleteAdminUser = (id, adminKey) =>
+  request(`/api/admin/users/${id}`, { method: 'DELETE', headers: { 'x-admin-key': adminKey } });

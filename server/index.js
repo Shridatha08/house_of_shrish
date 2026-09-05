@@ -268,7 +268,7 @@ app.patch('/api/admin/settings', async (req, res) => {
   res.json(db.data.settings);
 });
 
-// GET /api/subscriptions/me - list the current user's Monthly subscriptions with computed end dates
+// GET /api/subscriptions/me - list the current user's admin-approved Monthly subscriptions
 app.get('/api/subscriptions/me', async (req, res) => {
   const db = await getDb();
   const user = await getUserFromToken(db, req);
@@ -276,7 +276,7 @@ app.get('/api/subscriptions/me', async (req, res) => {
 
   const today = todayStr();
   const result = db.data.subscriptions
-    .filter((s) => s.userId === user.id)
+    .filter((s) => s.userId === user.id && s.approved)
     .map((s) => {
       const endDate = computeSubscriptionEndDate(s.startDate, s.workingDaysRequired, db.data.holidays);
       const daysRemaining = countWorkingDaysRemaining(today, endDate, db.data.holidays);
@@ -344,6 +344,48 @@ app.patch('/api/admin/subscriptions/:id', async (req, res) => {
 
   const endDate = computeSubscriptionEndDate(subscription.startDate, subscription.workingDaysRequired, db.data.holidays);
   res.json({ ...subscription, endDate });
+});
+
+// PATCH /api/admin/subscriptions/:id/approve - make a pending subscription visible to the user (requires admin key)
+app.patch('/api/admin/subscriptions/:id/approve', async (req, res) => {
+  if (req.headers['x-admin-key'] !== ADMIN_KEY) {
+    return res.status(403).json({ error: 'Invalid admin key.' });
+  }
+  const db = await getDb();
+  const subscription = db.data.subscriptions.find((s) => s.id === req.params.id);
+  if (!subscription) return res.status(404).json({ error: 'Subscription not found.' });
+  subscription.approved = true;
+  await db.write();
+
+  const endDate = computeSubscriptionEndDate(subscription.startDate, subscription.workingDaysRequired, db.data.holidays);
+  res.json({ ...subscription, endDate });
+});
+
+// GET /api/admin/users - list all registered users (requires admin key)
+app.get('/api/admin/users', async (req, res) => {
+  if (req.headers['x-admin-key'] !== ADMIN_KEY) {
+    return res.status(403).json({ error: 'Invalid admin key.' });
+  }
+  const db = await getDb();
+  res.json(db.data.users.map((u) => ({ id: u.id, name: u.name, phone: u.phone, address: u.address || '', createdAt: u.createdAt })));
+});
+
+// DELETE /api/admin/users/:id - remove a registered user and their sessions/subscriptions (requires admin key)
+app.delete('/api/admin/users/:id', async (req, res) => {
+  if (req.headers['x-admin-key'] !== ADMIN_KEY) {
+    return res.status(403).json({ error: 'Invalid admin key.' });
+  }
+  const db = await getDb();
+  const userId = Number(req.params.id);
+  const before = db.data.users.length;
+  db.data.users = db.data.users.filter((u) => u.id !== userId);
+  if (db.data.users.length === before) {
+    return res.status(404).json({ error: 'User not found.' });
+  }
+  db.data.sessions = db.data.sessions.filter((s) => s.userId !== userId);
+  db.data.subscriptions = db.data.subscriptions.filter((s) => s.userId !== userId);
+  await db.write();
+  res.status(204).end();
 });
 
 // POST /api/orders - place a new order
@@ -427,6 +469,7 @@ app.post('/api/orders', async (req, res) => {
           itemName: item.name,
           startDate,
           workingDaysRequired: db.data.settings.subscriptionWorkingDays,
+          approved: false,
           createdAt: new Date().toISOString()
         });
       }

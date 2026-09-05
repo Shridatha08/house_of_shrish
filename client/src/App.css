@@ -683,6 +683,11 @@
   color: #c0392b;
 }
 
+.subscription-badge.pending {
+  background: #eef0ff;
+  color: #4453c4;
+}
+
 .subscription-item-name {
   margin: 6px 0 10px;
   font-weight: 600;
