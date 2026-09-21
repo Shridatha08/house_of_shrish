@@ -95,7 +95,27 @@ function isValidDateString(value) {
 }
 
 function isValidTimeSlot(value) {
-  return value === '11:00-13:00' || value === '18:00-20:00';
+  return ['11:00-13:00', '18:00-20:00'].includes(value);
+}
+
+function getSettings(data) {
+  return {
+    subscriptionWorkingDays: 26,
+    announcement: '',
+    orderingPaused: false,
+    kitchenClosedDates: [],
+    dailyOrderCapacity: 50,
+    orderCutoffTime: '10:00',
+    deliveryTimeSlots: ['11:00-13:00', '18:00-20:00'],
+    ...(data.settings || {})
+  };
+}
+
+function isBeforeCutoff(dateStr, cutoff) {
+  if (dateStr !== todayStr()) return true;
+  const [hours, minutes] = cutoff.split(':').map(Number);
+  const now = new Date();
+  return now.getUTCHours() * 60 + now.getUTCMinutes() < hours * 60 + minutes;
 }
 
 function todayStr() {
@@ -305,7 +325,47 @@ app.patch('/api/auth/profile', async (req, res) => {
 // GET /api/menu - list all menu items
 app.get('/api/menu', async (req, res) => {
   const db = await getDb();
-  res.json(db.data.menu);
+  const settings = getSettings(db.data);
+  const today = todayStr();
+  const orderedToday = db.data.orders
+    .filter((order) => order.createdAt?.slice(0, 10) === today && !['cancelled', 'refunded'].includes(order.status))
+    .reduce((sum, order) => sum + order.items.reduce((items, item) => items + item.quantity, 0), 0);
+  res.json(db.data.menu.map((item) => ({
+    ...item,
+    available: item.available !== false && (!Number.isInteger(item.dailyStock) || item.dailyStock > 0),
+    remainingStock: Number.isInteger(item.dailyStock) ? Math.max(0, item.dailyStock - orderedToday) : null
+  })));
+});
+
+// GET /api/store-config - public kitchen and delivery rules
+app.get('/api/store-config', async (req, res) => {
+  const db = await getDb();
+  const settings = getSettings(db.data);
+  res.json({
+    announcement: settings.announcement,
+    orderingPaused: settings.orderingPaused,
+    kitchenClosedDates: settings.kitchenClosedDates,
+    orderCutoffTime: settings.orderCutoffTime,
+    deliveryTimeSlots: settings.deliveryTimeSlots,
+    dailyOrderCapacity: settings.dailyOrderCapacity
+  });
+});
+
+// PATCH /api/admin/menu/:id - update availability and daily stock
+app.patch('/api/admin/menu/:id', async (req, res) => {
+  if (req.headers['x-admin-key'] !== ADMIN_KEY) return res.status(403).json({ error: 'Invalid admin key.' });
+  const db = await getDb();
+  const item = db.data.menu.find((candidate) => candidate.id === Number(req.params.id));
+  if (!item) return res.status(404).json({ error: 'Menu item not found.' });
+  const { available, dailyStock } = req.body || {};
+  if (typeof available !== 'boolean') return res.status(400).json({ error: 'Availability must be true or false.' });
+  if (dailyStock !== null && (!Number.isInteger(Number(dailyStock)) || Number(dailyStock) < 0)) {
+    return res.status(400).json({ error: 'Daily stock must be a non-negative number or empty.' });
+  }
+  item.available = available;
+  item.dailyStock = dailyStock === null ? null : Number(dailyStock);
+  await db.write();
+  res.json(item);
 });
 
 // GET /api/holidays - list admin-added holidays
@@ -328,7 +388,7 @@ app.post('/api/holidays', async (req, res) => {
     return res.status(403).json({ error: 'Invalid admin key.' });
   }
   const { date, name } = req.body || {};
-  if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+  if (!isValidDateString(date)) {
     return res.status(400).json({ error: 'Date must be in YYYY-MM-DD format.' });
   }
   if (typeof name !== 'string' || !name.trim()) {
@@ -366,7 +426,7 @@ app.get('/api/admin/settings', async (req, res) => {
     return res.status(403).json({ error: 'Invalid admin key.' });
   }
   const db = await getDb();
-  res.json(db.data.settings);
+  res.json(getSettings(db.data));
 });
 
 // PATCH /api/admin/settings - update subscription settings (requires admin key)
@@ -374,15 +434,25 @@ app.patch('/api/admin/settings', async (req, res) => {
   if (req.headers['x-admin-key'] !== ADMIN_KEY) {
     return res.status(403).json({ error: 'Invalid admin key.' });
   }
-  const { subscriptionWorkingDays } = req.body || {};
-  const days = Number(subscriptionWorkingDays);
+  const input = req.body || {};
+  const days = Number(input.subscriptionWorkingDays);
   if (!Number.isInteger(days) || days <= 0 || days > 365) {
     return res.status(400).json({ error: 'Subscription working days must be a positive number.' });
   }
   const db = await getDb();
-  db.data.settings.subscriptionWorkingDays = days;
+  const settings = getSettings(db.data);
+  const updates = {
+    subscriptionWorkingDays: days,
+    announcement: typeof input.announcement === 'string' ? input.announcement.trim().slice(0, 240) : settings.announcement,
+    orderingPaused: typeof input.orderingPaused === 'boolean' ? input.orderingPaused : settings.orderingPaused,
+    kitchenClosedDates: Array.isArray(input.kitchenClosedDates) && input.kitchenClosedDates.every(isValidDateString) ? input.kitchenClosedDates : settings.kitchenClosedDates,
+    dailyOrderCapacity: Number.isInteger(Number(input.dailyOrderCapacity)) && Number(input.dailyOrderCapacity) > 0 ? Number(input.dailyOrderCapacity) : settings.dailyOrderCapacity,
+    orderCutoffTime: typeof input.orderCutoffTime === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(input.orderCutoffTime) ? input.orderCutoffTime : settings.orderCutoffTime,
+    deliveryTimeSlots: Array.isArray(input.deliveryTimeSlots) && input.deliveryTimeSlots.length > 0 ? input.deliveryTimeSlots.filter(isValidTimeSlot) : settings.deliveryTimeSlots
+  };
+  db.data.settings = updates;
   await db.write();
-  res.json(db.data.settings);
+  res.json(updates);
 });
 
 // GET /api/subscriptions/me - list the current user's admin-approved Monthly subscriptions
@@ -445,7 +515,7 @@ app.patch('/api/admin/subscriptions/:id', async (req, res) => {
 
   const { startDate, workingDaysRequired } = req.body || {};
   if (startDate !== undefined) {
-    if (typeof startDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) {
+    if (!isValidDateString(startDate)) {
       return res.status(400).json({ error: 'Start date must be in YYYY-MM-DD format.' });
     }
     subscription.startDate = startDate;
@@ -556,6 +626,15 @@ app.post('/api/orders', async (req, res) => {
   }
 
   const db = await getDb();
+  const settings = getSettings(db.data);
+  if (settings.orderingPaused) return res.status(409).json({ error: 'Ordering is temporarily paused.' });
+  if (settings.kitchenClosedDates.includes(scheduledDate)) return res.status(409).json({ error: 'The kitchen is closed on the selected date.' });
+  if (!settings.deliveryTimeSlots.includes(timeSlot)) return res.status(400).json({ error: 'Choose one of the available delivery time slots.' });
+  if (!isBeforeCutoff(scheduledDate, settings.orderCutoffTime)) return res.status(409).json({ error: `Orders for today close at ${settings.orderCutoffTime} UTC.` });
+  const scheduledOrders = db.data.orders.filter((order) => order.scheduledDate === scheduledDate && !['cancelled', 'refunded'].includes(order.status));
+  const scheduledQuantity = scheduledOrders.reduce((sum, order) => sum + order.items.reduce((items, item) => items + item.quantity, 0), 0);
+  const requestedQuantity = items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+  if (scheduledQuantity + requestedQuantity > settings.dailyOrderCapacity) return res.status(409).json({ error: 'That delivery date has reached kitchen capacity.' });
   const menuById = new Map(db.data.menu.map((item) => [item.id, item]));
 
   const user = await getUserFromToken(db, req);
@@ -574,6 +653,11 @@ app.post('/api/orders', async (req, res) => {
     const quantity = Number(line.quantity);
     if (!menuItem || !Number.isInteger(quantity) || quantity <= 0 || quantity > 50) {
       return res.status(400).json({ error: 'Invalid item in cart.' });
+    }
+    if (menuItem.available === false) return res.status(409).json({ error: `${menuItem.name} is currently unavailable.` });
+    if (Number.isInteger(menuItem.dailyStock)) {
+      const alreadyOrdered = scheduledOrders.reduce((sum, order) => sum + order.items.filter((item) => item.id === menuItem.id).reduce((items, item) => items + item.quantity, 0), 0);
+      if (alreadyOrdered + quantity > menuItem.dailyStock) return res.status(409).json({ error: `${menuItem.name} has reached its daily stock limit.` });
     }
     let customisation = '';
     if (Array.isArray(menuItem.customisations) && menuItem.customisations.length > 0) {
@@ -717,6 +801,9 @@ app.get('/api/orders/:id/invoice', async (req, res) => {
     invoiceNumber: `INV-${order.orderNumber || order.id}`,
     orderNumber: order.orderNumber || String(order.id),
     date: order.createdAt,
+    status: order.status,
+    scheduledDate: order.scheduledDate,
+    timeSlot: order.timeSlot,
     business: BUSINESS,
     customer: order.customer,
     items,

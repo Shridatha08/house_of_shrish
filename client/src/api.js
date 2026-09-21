@@ -18,6 +18,8 @@ function authHeaders(token) {
 
 export const getMenu = () => request('/api/menu');
 
+export const getStoreConfig = () => request('/api/store-config');
+
 export const placeOrder = (payload, token) =>
   request('/api/orders', { method: 'POST', body: JSON.stringify(payload), headers: authHeaders(token) });
 
@@ -120,5 +122,12 @@ export const updateAdminOrderStatus = (id, status, adminKey) =>
   request(`/api/admin/orders/${id}/status`, {
     method: 'PATCH',
     body: JSON.stringify({ status }),
+    headers: { 'x-admin-key': adminKey }
+  });
+
+export const updateAdminMenuItem = (id, payload, adminKey) =>
+  request(`/api/admin/menu/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
     headers: { 'x-admin-key': adminKey }
   });

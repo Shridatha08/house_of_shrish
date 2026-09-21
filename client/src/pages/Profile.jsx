@@ -143,11 +143,12 @@ export default function Profile() {
             <div key={order.id} className="subscription-summary-card">
               <div className="subscription-summary-header">
                 <strong>#{order.orderNumber || order.id}</strong>
-                <span className="subscription-badge active">{order.status.replaceAll('_', ' ')}</span>
+                <span className={`subscription-badge ${order.status === 'delivered' ? 'active' : order.status === 'cancelled' || order.status === 'refunded' ? 'expired' : order.status === 'refund_requested' ? 'pending' : 'expiring'}`}>{order.status.replaceAll('_', ' ')}</span>
               </div>
               <p className="subscription-summary-dates">
                 {order.scheduledDate} · {order.timeSlot} · ₹{order.total}
               </p>
+              <p className="subscription-summary-dates">Payment / delivery status: {order.status.replaceAll('_', ' ')}</p>
               <p className="subscription-summary-dates">{order.items.map((item) => `${item.name} × ${item.quantity}`).join(', ')}</p>
               <div className="order-actions">
                 {order.status !== 'pending_payment' && <Link to={`/invoice/${order.id}`} className="btn-link">View invoice</Link>}

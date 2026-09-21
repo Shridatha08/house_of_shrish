@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { getMenu } from '../api';
+import { getMenu, getStoreConfig } from '../api';
 import { useCart } from '../context/CartContext';
 import fssaiLogo from '../../../fssai.png';
 import mealsImg from '../../../meals.png';
@@ -46,6 +46,7 @@ export default function Menu() {
   const [menu, setMenu] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [storeConfig, setStoreConfig] = useState({ announcement: '', orderingPaused: false });
   const [selectedCustomisation, setSelectedCustomisation] = useState({}); // { [menuItemId]: customisation }
   const [selectedPlanId, setSelectedPlanId] = useState(null);
   const { items, addItem, decreaseItem, total, count, makeKey } = useCart();
@@ -55,6 +56,7 @@ export default function Menu() {
       .then(setMenu)
       .catch(() => setError('Could not load the menu. Is the server running?'))
       .finally(() => setLoading(false));
+    getStoreConfig().then(setStoreConfig).catch(() => {});
   }, []);
 
   function customisationFor(item) {
@@ -93,9 +95,8 @@ export default function Menu() {
         </div>
       </section>
 
-      <div className="announcement-banner">
-        Kitchen closed from Sep 12-16
-      </div>
+      {storeConfig.announcement && <div className="announcement-banner">{storeConfig.announcement}</div>}
+      {storeConfig.orderingPaused && <div className="announcement-banner">Ordering is temporarily paused.</div>}
 
       {categories.map((category) => {
         const categoryItems = menu.filter((item) => item.category === category);
@@ -130,10 +131,8 @@ export default function Menu() {
                     )}
                   </div>
                   <div className="menu-card-actions">
-                    {quantityOf(item) === 0 ? (
-                      <button className="btn-add" onClick={() => addItem(item, customisationFor(item))}>
-                        Add
-                      </button>
+                    {item.available === false ? <span className="status-text">Unavailable</span> : quantityOf(item) === 0 ? (
+                      <button className="btn-add" disabled={storeConfig.orderingPaused} onClick={() => addItem(item, customisationFor(item))}>Add</button>
                     ) : (
                       <div className="qty-control">
                         <button onClick={() => decreaseItem(makeKey(item.id, customisationFor(item)))}>−</button>
@@ -188,10 +187,8 @@ export default function Menu() {
                     <p className="menu-price">₹{selectedPlan.price}</p>
                   </div>
                   <div className="menu-card-actions">
-                    {quantityOf(selectedPlan) === 0 ? (
-                      <button className="btn-add" onClick={() => addItem(selectedPlan, customisationFor(selectedPlan))}>
-                        Add
-                      </button>
+                    {selectedPlan.available === false ? <span className="status-text">Unavailable</span> : quantityOf(selectedPlan) === 0 ? (
+                      <button className="btn-add" disabled={storeConfig.orderingPaused} onClick={() => addItem(selectedPlan, customisationFor(selectedPlan))}>Add</button>
                     ) : (
                       <div className="qty-control">
                         <button onClick={() => decreaseItem(makeKey(selectedPlan.id, customisationFor(selectedPlan)))}>−</button>

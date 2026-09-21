@@ -13,7 +13,9 @@ import {
   getAdminUsers,
   deleteAdminUser,
   getAdminOrders,
-  updateAdminOrderStatus
+  updateAdminOrderStatus,
+  getMenu,
+  updateAdminMenuItem
 } from '../api';
 
 const ADMIN_KEY_STORAGE = 'houseOfShrishAdminKey';
@@ -34,6 +36,14 @@ export default function AdminHolidays() {
   const [settingsError, setSettingsError] = useState('');
   const [settingsSaved, setSettingsSaved] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
+  const [announcement, setAnnouncement] = useState('');
+  const [orderingPaused, setOrderingPaused] = useState(false);
+  const [dailyOrderCapacity, setDailyOrderCapacity] = useState('50');
+  const [orderCutoffTime, setOrderCutoffTime] = useState('10:00');
+  const [kitchenClosedDates, setKitchenClosedDates] = useState('');
+  const [deliveryTimeSlots, setDeliveryTimeSlots] = useState('11:00-13:00,18:00-20:00');
+  const [menuItems, setMenuItems] = useState([]);
+  const [savingMenuId, setSavingMenuId] = useState(null);
 
   const [subscriptions, setSubscriptions] = useState([]);
   const [subsEdits, setSubsEdits] = useState({}); // { [id]: { startDate, workingDaysRequired } }
@@ -67,11 +77,20 @@ export default function AdminHolidays() {
     if (unlocked) {
       getHolidays().then(setHolidays).catch(() => setHolidays([]));
       getAdminSettings(adminKey)
-        .then((s) => setWorkingDays(String(s.subscriptionWorkingDays)))
+        .then((s) => {
+          setWorkingDays(String(s.subscriptionWorkingDays));
+          setAnnouncement(s.announcement || '');
+          setOrderingPaused(Boolean(s.orderingPaused));
+          setDailyOrderCapacity(String(s.dailyOrderCapacity || 50));
+          setOrderCutoffTime(s.orderCutoffTime || '10:00');
+          setKitchenClosedDates((s.kitchenClosedDates || []).join(','));
+          setDeliveryTimeSlots((s.deliveryTimeSlots || []).join(','));
+        })
         .catch(() => {});
       getAdminSubscriptions(adminKey).then(setSubscriptions).catch(() => setSubscriptions([]));
       getAdminUsers(adminKey).then(setUsers).catch(() => setUsers([]));
       getAdminOrders(adminKey).then(setOrders).catch(() => setOrders([]));
+      getMenu().then(setMenuItems).catch(() => setMenuItems([]));
     }
   }, [unlocked, adminKey]);
 
@@ -118,12 +137,32 @@ export default function AdminHolidays() {
     setSettingsSaved(false);
     setSavingSettings(true);
     try {
-      await updateAdminSettings({ subscriptionWorkingDays: Number(workingDays) }, adminKey);
+      await updateAdminSettings({
+        subscriptionWorkingDays: Number(workingDays),
+        announcement,
+        orderingPaused,
+        dailyOrderCapacity: Number(dailyOrderCapacity),
+        orderCutoffTime,
+        kitchenClosedDates: kitchenClosedDates.split(',').map((value) => value.trim()).filter(Boolean),
+        deliveryTimeSlots: deliveryTimeSlots.split(',').map((value) => value.trim()).filter(Boolean)
+      }, adminKey);
       setSettingsSaved(true);
     } catch (err) {
       setSettingsError(err.message);
     } finally {
       setSavingSettings(false);
+    }
+  }
+
+  async function handleSaveMenuItem(item) {
+    setSavingMenuId(item.id);
+    try {
+      const updated = await updateAdminMenuItem(item.id, { available: item.available !== false, dailyStock: item.dailyStock ?? null }, adminKey);
+      setMenuItems((prev) => prev.map((candidate) => candidate.id === updated.id ? updated : candidate));
+    } catch (err) {
+      setSettingsError(err.message);
+    } finally {
+      setSavingMenuId(null);
     }
   }
 
@@ -244,12 +283,33 @@ export default function AdminHolidays() {
             required
           />
         </label>
+        <label>
+          Kitchen announcement
+          <textarea rows={2} value={announcement} onChange={(e) => setAnnouncement(e.target.value)} placeholder="Optional notice shown on the menu" />
+        </label>
+        <label><input type="checkbox" checked={orderingPaused} onChange={(e) => setOrderingPaused(e.target.checked)} /> Pause ordering</label>
+        <label>Daily order capacity<input type="number" min={1} value={dailyOrderCapacity} onChange={(e) => setDailyOrderCapacity(e.target.value)} /></label>
+        <label>Same-day order cutoff (UTC)<input type="time" value={orderCutoffTime} onChange={(e) => setOrderCutoffTime(e.target.value)} /></label>
+        <label>Kitchen closed dates<input value={kitchenClosedDates} onChange={(e) => setKitchenClosedDates(e.target.value)} placeholder="YYYY-MM-DD, YYYY-MM-DD" /></label>
+        <label>Delivery slots<input value={deliveryTimeSlots} onChange={(e) => setDeliveryTimeSlots(e.target.value)} placeholder="11:00-13:00,18:00-20:00" /></label>
         {settingsError && <p className="status-text error">{settingsError}</p>}
         {settingsSaved && <p className="status-text">Saved.</p>}
         <button className="btn-primary" type="submit" disabled={savingSettings}>
           {savingSettings ? 'Saving…' : 'Save Setting'}
         </button>
       </form>
+
+      <h2 style={{ marginTop: 32 }}>Menu Availability &amp; Stock</h2>
+      <div className="cart-list">
+        {menuItems.map((item) => (
+          <div key={item.id} className="cart-row">
+            <span className="cart-row-name">{item.name}</span>
+            <label><input type="checkbox" checked={item.available !== false} onChange={(e) => setMenuItems((prev) => prev.map((candidate) => candidate.id === item.id ? { ...candidate, available: e.target.checked } : candidate))} /> Available</label>
+            <input type="number" min={0} placeholder="Unlimited" value={item.dailyStock ?? ''} onChange={(e) => setMenuItems((prev) => prev.map((candidate) => candidate.id === item.id ? { ...candidate, dailyStock: e.target.value === '' ? null : Number(e.target.value) } : candidate))} />
+            <button type="button" className="btn-add" onClick={() => handleSaveMenuItem(item)} disabled={savingMenuId === item.id}>{savingMenuId === item.id ? 'Saving…' : 'Save'}</button>
+          </div>
+        ))}
+      </div>
 
       <h2 style={{ marginTop: 32 }}>Manage Holidays</h2>
 

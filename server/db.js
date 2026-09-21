@@ -18,7 +18,13 @@ const defaultData = {
   sessions: [],
   subscriptions: [],
   settings: {
-    subscriptionWorkingDays: 26
+    subscriptionWorkingDays: 26,
+    announcement: '',
+    orderingPaused: false,
+    kitchenClosedDates: [],
+    dailyOrderCapacity: 50,
+    orderCutoffTime: '10:00',
+    deliveryTimeSlots: ['11:00-13:00', '18:00-20:00']
   },
   holidays: [
     { id: 1, date: '2026-01-01', name: "New Year's Day" },
