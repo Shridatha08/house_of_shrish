@@ -10,8 +10,8 @@ const PORT = process.env.PORT || 4000;
 
 const UPI_ID = 'houseofshrish@ybl';
 const MERCHANT_NAME = 'House of Shrish';
-// Demo-only shared secret for holiday admin actions; replace with real admin auth in production.
-const ADMIN_KEY = process.env.ADMIN_KEY || 'shrish-admin-2026';
+const ADMIN_KEY = process.env.ADMIN_KEY;
+if (!ADMIN_KEY) throw new Error('ADMIN_KEY environment variable is required.');
 
 // Demo business details shown on invoices.
 const BUSINESS = {
@@ -34,6 +34,39 @@ function buildOrderNumber(date, dailySequence) {
 app.use(cors());
 app.use(express.json());
 
+const rateLimitBuckets = new Map();
+function rateLimit({ windowMs, max, key = (req) => req.ip }) {
+  return (req, res, next) => {
+    const bucketKey = `${key(req)}:${req.path}`;
+    const now = Date.now();
+    const bucket = rateLimitBuckets.get(bucketKey);
+    if (!bucket || bucket.resetAt <= now) {
+      rateLimitBuckets.set(bucketKey, { count: 1, resetAt: now + windowMs });
+      return next();
+    }
+    bucket.count += 1;
+    if (bucket.count > max) {
+      res.set('Retry-After', Math.ceil((bucket.resetAt - now) / 1000));
+      return res.status(429).json({ error: 'Too many attempts. Please try again later.' });
+    }
+    next();
+  };
+}
+
+app.use((req, res, next) => {
+  res.set({
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'strict-origin-when-cross-origin',
+    'Content-Security-Policy': "default-src 'self' https:; img-src 'self' data: https:; style-src 'self' 'unsafe-inline' https:; script-src 'self' 'unsafe-inline' https:; connect-src 'self' https:; frame-ancestors 'none'"
+  });
+  next();
+});
+
+const authRateLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 10 });
+const adminRateLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 30, key: (req) => req.ip });
+app.use('/api/admin', adminRateLimit);
+
 async function getUserFromToken(db, req) {
   const authHeader = req.headers.authorization || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
@@ -45,6 +78,24 @@ async function getUserFromToken(db, req) {
 
 function publicUser(user) {
   return { id: user.id, name: user.name, phone: user.phone, address: user.address || '' };
+}
+
+function getOrderToken(req) {
+  return req.headers['x-order-token'] || null;
+}
+
+function canAccessOrder(order, user, req) {
+  return (user && order.userId === user.id) || order.accessToken === getOrderToken(req);
+}
+
+function isValidDateString(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00Z`);
+  return date.toISOString().slice(0, 10) === value;
+}
+
+function isValidTimeSlot(value) {
+  return value === '11:00-13:00' || value === '18:00-20:00';
 }
 
 function todayStr() {
@@ -89,7 +140,7 @@ function countWorkingDaysRemaining(today, endDate, holidays) {
 }
 
 // POST /api/auth/register - create a new account
-app.post('/api/auth/register', async (req, res) => {
+app.post('/api/auth/register', authRateLimit, async (req, res) => {
   const { name, phone, password, address } = req.body || {};
 
   if (typeof name !== 'string' || !name.trim()) {
@@ -129,7 +180,7 @@ app.post('/api/auth/register', async (req, res) => {
 });
 
 // POST /api/auth/login - authenticate an existing account
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', authRateLimit, async (req, res) => {
   const { phone, password } = req.body || {};
 
   if (typeof phone !== 'string' || typeof password !== 'string') {
@@ -150,7 +201,7 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 // POST /api/auth/password-reset/verify-phone - exchange a Phone.Email verification URL for a reset token
-app.post('/api/auth/password-reset/verify-phone', async (req, res) => {
+app.post('/api/auth/password-reset/verify-phone', authRateLimit, async (req, res) => {
   const { userJsonUrl } = req.body || {};
   let verificationUrl;
   try {
@@ -193,7 +244,7 @@ app.post('/api/auth/password-reset/verify-phone', async (req, res) => {
 });
 
 // POST /api/auth/password-reset - set a new password after Phone.Email verification
-app.post('/api/auth/password-reset', async (req, res) => {
+app.post('/api/auth/password-reset', authRateLimit, async (req, res) => {
   const { resetToken, password } = req.body || {};
   if (typeof password !== 'string' || password.length < 6) {
     return res.status(400).json({ error: 'Password must be at least 6 characters.' });
@@ -454,9 +505,36 @@ app.delete('/api/admin/users/:id', async (req, res) => {
   res.status(204).end();
 });
 
+// GET /api/admin/orders - operational order queue
+app.get('/api/admin/orders', async (req, res) => {
+  if (req.headers['x-admin-key'] !== ADMIN_KEY) return res.status(403).json({ error: 'Invalid admin key.' });
+  const db = await getDb();
+  res.json(db.data.orders
+    .slice()
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .map(({ accessToken, ...order }) => order));
+});
+
+// PATCH /api/admin/orders/:id/status - update fulfillment or refund status
+app.patch('/api/admin/orders/:id/status', async (req, res) => {
+  if (req.headers['x-admin-key'] !== ADMIN_KEY) return res.status(403).json({ error: 'Invalid admin key.' });
+  const allowedStatuses = ['paid', 'preparing', 'out_for_delivery', 'delivered', 'cancelled', 'refund_requested', 'refunded'];
+  const { status } = req.body || {};
+  if (!allowedStatuses.includes(status)) return res.status(400).json({ error: 'Invalid order status.' });
+  const db = await getDb();
+  const order = db.data.orders.find((candidate) => candidate.id === Number(req.params.id));
+  if (!order) return res.status(404).json({ error: 'Order not found.' });
+  order.status = status;
+  order.statusUpdatedAt = new Date().toISOString();
+  if (status === 'refunded') order.refundedAt = order.statusUpdatedAt;
+  await db.write();
+  const { accessToken, ...safeOrder } = order;
+  res.json(safeOrder);
+});
+
 // POST /api/orders - place a new order
 app.post('/api/orders', async (req, res) => {
-  const { items, customer } = req.body || {};
+  const { items, customer, scheduledDate, timeSlot } = req.body || {};
 
   if (!Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: 'Order must include at least one item.' });
@@ -469,6 +547,12 @@ app.post('/api/orders', async (req, res) => {
   }
   if (typeof customer.address !== 'string' || !customer.address.trim()) {
     return res.status(400).json({ error: 'Delivery address is required.' });
+  }
+  if (!isValidDateString(scheduledDate) || scheduledDate < todayStr()) {
+    return res.status(400).json({ error: 'Choose a valid delivery date from today onward.' });
+  }
+  if (!isValidTimeSlot(timeSlot)) {
+    return res.status(400).json({ error: 'Choose a valid delivery time slot.' });
   }
 
   const db = await getDb();
@@ -503,6 +587,7 @@ app.post('/api/orders', async (req, res) => {
   }
 
   const orderId = Date.now();
+  const accessToken = crypto.randomBytes(24).toString('hex');
   const now = new Date();
   const todayKey = now.toISOString().slice(0, 10);
   const ordersToday = db.data.orders.filter((o) => o.createdAt.slice(0, 10) === todayKey).length;
@@ -511,6 +596,10 @@ app.post('/api/orders', async (req, res) => {
     orderNumber: buildOrderNumber(now, ordersToday + 1),
     items: orderItems,
     total,
+    userId: user?.id || null,
+    accessToken,
+    scheduledDate,
+    timeSlot,
     customer: {
       name: customer.name.trim(),
       phone: customer.phone.trim(),
@@ -546,7 +635,7 @@ app.post('/api/orders', async (req, res) => {
 
   const upiUri = `upi://pay?pa=${encodeURIComponent(UPI_ID)}&pn=${encodeURIComponent(MERCHANT_NAME)}&am=${total}&cu=INR&tn=${encodeURIComponent('Order ' + order.id)}`;
 
-  res.status(201).json({ order, upiUri });
+  res.status(201).json({ order: { ...order, accessToken: undefined }, upiUri, accessToken });
 });
 
 // GET /api/orders/:id - fetch a single order's status
@@ -554,7 +643,10 @@ app.get('/api/orders/:id', async (req, res) => {
   const db = await getDb();
   const order = db.data.orders.find((o) => o.id === Number(req.params.id));
   if (!order) return res.status(404).json({ error: 'Order not found.' });
-  res.json(order);
+  const user = await getUserFromToken(db, req);
+  if (!canAccessOrder(order, user, req)) return res.status(403).json({ error: 'You cannot access this order.' });
+  const { accessToken, ...safeOrder } = order;
+  res.json(safeOrder);
 });
 
 // PATCH /api/orders/:id/mark-paid - mark an order as paid (called once user confirms payment)
@@ -562,16 +654,62 @@ app.patch('/api/orders/:id/mark-paid', async (req, res) => {
   const db = await getDb();
   const order = db.data.orders.find((o) => o.id === Number(req.params.id));
   if (!order) return res.status(404).json({ error: 'Order not found.' });
+  const user = await getUserFromToken(db, req);
+  if (!canAccessOrder(order, user, req)) return res.status(403).json({ error: 'You cannot update this order.' });
+  if (order.status !== 'pending_payment') return res.status(409).json({ error: 'This order is no longer awaiting payment.' });
   order.status = 'paid';
+  order.paymentSubmittedAt = new Date().toISOString();
   await db.write();
-  res.json(order);
+  const { accessToken, ...safeOrder } = order;
+  res.json(safeOrder);
 });
 
-// GET /api/orders/:id/invoice - invoice breakdown for a paid order
+// GET /api/orders/me - authenticated customer's order history
+app.get('/api/orders/me', async (req, res) => {
+  const db = await getDb();
+  const user = await getUserFromToken(db, req);
+  if (!user) return res.status(401).json({ error: 'Not signed in.' });
+  res.json(db.data.orders.filter((order) => order.userId === user.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(({ accessToken, ...order }) => order));
+});
+
+// PATCH /api/orders/:id/cancel - customer cancellation before fulfillment
+app.patch('/api/orders/:id/cancel', async (req, res) => {
+  const db = await getDb();
+  const order = db.data.orders.find((o) => o.id === Number(req.params.id));
+  const user = await getUserFromToken(db, req);
+  if (!order) return res.status(404).json({ error: 'Order not found.' });
+  if (!canAccessOrder(order, user, req)) return res.status(403).json({ error: 'You cannot update this order.' });
+  if (!['pending_payment', 'paid'].includes(order.status)) return res.status(409).json({ error: 'This order can no longer be cancelled.' });
+  order.status = 'cancelled';
+  order.cancelledAt = new Date().toISOString();
+  await db.write();
+  const { accessToken, ...safeOrder } = order;
+  res.json(safeOrder);
+});
+
+// POST /api/orders/:id/refund-request - request a refund for an eligible paid order
+app.post('/api/orders/:id/refund-request', async (req, res) => {
+  const db = await getDb();
+  const order = db.data.orders.find((o) => o.id === Number(req.params.id));
+  const user = await getUserFromToken(db, req);
+  if (!order) return res.status(404).json({ error: 'Order not found.' });
+  if (!canAccessOrder(order, user, req)) return res.status(403).json({ error: 'You cannot update this order.' });
+  if (!['paid', 'cancelled'].includes(order.status)) return res.status(409).json({ error: 'This order is not eligible for a refund request.' });
+  order.status = 'refund_requested';
+  order.refundRequestedAt = new Date().toISOString();
+  await db.write();
+  const { accessToken, ...safeOrder } = order;
+  res.json(safeOrder);
+});
+
+// GET /api/orders/:id/invoice - invoice breakdown for an authorized paid order
 app.get('/api/orders/:id/invoice', async (req, res) => {
   const db = await getDb();
   const order = db.data.orders.find((o) => o.id === Number(req.params.id));
   if (!order) return res.status(404).json({ error: 'Order not found.' });
+  const user = await getUserFromToken(db, req);
+  if (!canAccessOrder(order, user, req)) return res.status(403).json({ error: 'You cannot access this invoice.' });
+  if (order.status === 'pending_payment') return res.status(409).json({ error: 'Invoice is available after payment confirmation.' });
 
   const items = order.items.map((item) => ({ ...item, lineTotal: item.price * item.quantity }));
 

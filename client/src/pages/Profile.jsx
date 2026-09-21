@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { updateProfile, getMySubscriptions } from '../api';
+import { updateProfile, getMySubscriptions, getMyOrders, cancelOrder, requestRefund } from '../api';
 
 export default function Profile() {
   const { user, token, ready, updateUser } = useAuth();
@@ -14,12 +14,42 @@ export default function Profile() {
   const [submitting, setSubmitting] = useState(false);
 
   const [subscriptions, setSubscriptions] = useState([]);
+  const [orders, setOrders] = useState([]);
+  const [orderError, setOrderError] = useState('');
+  const [updatingOrderId, setUpdatingOrderId] = useState(null);
 
   useEffect(() => {
     if (user) {
       getMySubscriptions(token).then(setSubscriptions).catch(() => setSubscriptions([]));
+      getMyOrders(token).then(setOrders).catch(() => setOrders([]));
     }
   }, [user, token]);
+
+  async function handleCancelOrder(order) {
+    setOrderError('');
+    setUpdatingOrderId(order.id);
+    try {
+      const updated = await cancelOrder(order.id, token);
+      setOrders((prev) => prev.map((item) => item.id === updated.id ? updated : item));
+    } catch (err) {
+      setOrderError(err.message);
+    } finally {
+      setUpdatingOrderId(null);
+    }
+  }
+
+  async function handleRefundRequest(order) {
+    setOrderError('');
+    setUpdatingOrderId(order.id);
+    try {
+      const updated = await requestRefund(order.id, token);
+      setOrders((prev) => prev.map((item) => item.id === updated.id ? updated : item));
+    } catch (err) {
+      setOrderError(err.message);
+    } finally {
+      setUpdatingOrderId(null);
+    }
+  }
 
   if (ready && !user) {
     return <Navigate to="/login?redirect=/profile" replace />;
@@ -105,6 +135,32 @@ export default function Profile() {
             ))}
           </div>
         )}
+
+        <div className="profile-subscriptions">
+          <h2>My Orders</h2>
+          {orderError && <p className="status-text error">{orderError}</p>}
+          {orders.length === 0 ? <p className="status-text">No orders yet.</p> : orders.map((order) => (
+            <div key={order.id} className="subscription-summary-card">
+              <div className="subscription-summary-header">
+                <strong>#{order.orderNumber || order.id}</strong>
+                <span className="subscription-badge active">{order.status.replaceAll('_', ' ')}</span>
+              </div>
+              <p className="subscription-summary-dates">
+                {order.scheduledDate} · {order.timeSlot} · ₹{order.total}
+              </p>
+              <p className="subscription-summary-dates">{order.items.map((item) => `${item.name} × ${item.quantity}`).join(', ')}</p>
+              <div className="order-actions">
+                {order.status !== 'pending_payment' && <Link to={`/invoice/${order.id}`} className="btn-link">View invoice</Link>}
+                {['pending_payment', 'paid'].includes(order.status) && (
+                  <button type="button" className="btn-add" onClick={() => handleCancelOrder(order)} disabled={updatingOrderId === order.id}>Cancel order</button>
+                )}
+                {['paid', 'cancelled'].includes(order.status) && (
+                  <button type="button" className="btn-add" onClick={() => handleRefundRequest(order)} disabled={updatingOrderId === order.id}>Request refund</button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

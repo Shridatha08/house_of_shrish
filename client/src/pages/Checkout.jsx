@@ -14,6 +14,8 @@ export default function Checkout() {
   const [phone, setPhone] = useState('');
   const [address, setAddress] = useState('');
   const [position, setPosition] = useState(null);
+  const [scheduledDate, setScheduledDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [timeSlot, setTimeSlot] = useState('11:00-13:00');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -60,7 +62,7 @@ export default function Checkout() {
 
     setSubmitting(true);
     try {
-      const { order, upiUri } = await placeOrder(
+      const { order, upiUri, accessToken } = await placeOrder(
         {
           items: items.map((i) => ({ id: i.id, quantity: i.quantity, customisation: i.customisation })),
           customer: {
@@ -69,11 +71,13 @@ export default function Checkout() {
             address,
             lat: position?.lat ?? null,
             lng: position?.lng ?? null
-          }
+          },
+          scheduledDate,
+          timeSlot
         },
         token
       );
-      navigate(`/payment/${order.id}`, { state: { order, upiUri } });
+      navigate(`/payment/${order.id}`, { state: { order, upiUri, accessToken } });
     } catch (err) {
       setError(err.message);
     } finally {
@@ -137,6 +141,19 @@ export default function Checkout() {
           Delivery address
           <textarea value={address} onChange={(e) => setAddress(e.target.value)} rows={3} required />
         </label>
+        <div className="checkout-inline-fields">
+          <label>
+            Delivery date
+            <input type="date" value={scheduledDate} min={new Date().toISOString().slice(0, 10)} onChange={(e) => setScheduledDate(e.target.value)} required />
+          </label>
+          <label>
+            Time slot
+            <select value={timeSlot} onChange={(e) => setTimeSlot(e.target.value)} required>
+              <option value="11:00-13:00">11:00 AM - 1:00 PM</option>
+              <option value="18:00-20:00">6:00 PM - 8:00 PM</option>
+            </select>
+          </label>
+        </div>
 
         <div className="location-section">
           <div className="location-header">

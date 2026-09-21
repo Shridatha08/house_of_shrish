@@ -11,7 +11,9 @@ import {
   updateAdminSubscription,
   approveAdminSubscription,
   getAdminUsers,
-  deleteAdminUser
+  deleteAdminUser,
+  getAdminOrders,
+  updateAdminOrderStatus
 } from '../api';
 
 const ADMIN_KEY_STORAGE = 'houseOfShrishAdminKey';
@@ -42,6 +44,9 @@ export default function AdminHolidays() {
   const [users, setUsers] = useState([]);
   const [usersError, setUsersError] = useState('');
   const [removingUserId, setRemovingUserId] = useState(null);
+  const [orders, setOrders] = useState([]);
+  const [ordersError, setOrdersError] = useState('');
+  const [updatingOrderId, setUpdatingOrderId] = useState(null);
 
   useEffect(() => {
     const saved = sessionStorage.getItem(ADMIN_KEY_STORAGE);
@@ -66,6 +71,7 @@ export default function AdminHolidays() {
         .catch(() => {});
       getAdminSubscriptions(adminKey).then(setSubscriptions).catch(() => setSubscriptions([]));
       getAdminUsers(adminKey).then(setUsers).catch(() => setUsers([]));
+      getAdminOrders(adminKey).then(setOrders).catch(() => setOrders([]));
     }
   }, [unlocked, adminKey]);
 
@@ -177,6 +183,19 @@ export default function AdminHolidays() {
       setUsersError(err.message);
     } finally {
       setRemovingUserId(null);
+    }
+  }
+
+  async function handleOrderStatus(order, status) {
+    setOrdersError('');
+    setUpdatingOrderId(order.id);
+    try {
+      const updated = await updateAdminOrderStatus(order.id, status, adminKey);
+      setOrders((prev) => prev.map((item) => item.id === updated.id ? updated : item));
+    } catch (err) {
+      setOrdersError(err.message);
+    } finally {
+      setUpdatingOrderId(null);
     }
   }
 
@@ -332,6 +351,33 @@ export default function AdminHolidays() {
                 >
                   {savingSubId === sub.id ? 'Saving…' : 'Save'}
                 </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <h2 style={{ marginTop: 32 }}>Order Dashboard</h2>
+      {ordersError && <p className="status-text error">{ordersError}</p>}
+      {orders.length === 0 ? (
+        <p className="status-text">No orders yet.</p>
+      ) : (
+        <div className="subscription-list">
+          {orders.map((order) => (
+            <div key={order.id} className="subscription-card">
+              <div className="subscription-card-header">
+                <strong>#{order.orderNumber || order.id}</strong>
+                <span>{order.customer.name} · {order.customer.phone}</span>
+                <span className="subscription-badge active">{order.status.replaceAll('_', ' ')}</span>
+              </div>
+              <p className="subscription-item-name">{order.items.map((item) => `${item.name} × ${item.quantity}`).join(', ')}</p>
+              <p className="subscription-summary-dates">₹{order.total} · Delivery: {order.scheduledDate} · {order.timeSlot}</p>
+              <p className="subscription-summary-dates">{order.customer.address}</p>
+              <div className="order-actions">
+                {['paid', 'preparing'].includes(order.status) && <button type="button" className="btn-add" onClick={() => handleOrderStatus(order, 'preparing')} disabled={updatingOrderId === order.id}>Preparing</button>}
+                {['preparing'].includes(order.status) && <button type="button" className="btn-add" onClick={() => handleOrderStatus(order, 'out_for_delivery')} disabled={updatingOrderId === order.id}>Out for delivery</button>}
+                {['out_for_delivery'].includes(order.status) && <button type="button" className="btn-add" onClick={() => handleOrderStatus(order, 'delivered')} disabled={updatingOrderId === order.id}>Delivered</button>}
+                {['refund_requested'].includes(order.status) && <button type="button" className="btn-add" onClick={() => handleOrderStatus(order, 'refunded')} disabled={updatingOrderId === order.id}>Mark refunded</button>}
               </div>
             </div>
           ))}

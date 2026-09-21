@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router-dom';
 import { getInvoice } from '../api';
+import { useAuth } from '../context/AuthContext';
 
 function formatDate(iso) {
   return new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
@@ -8,14 +9,16 @@ function formatDate(iso) {
 
 export default function Invoice() {
   const { id } = useParams();
+  const location = useLocation();
+  const { token } = useAuth();
   const [invoice, setInvoice] = useState(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    getInvoice(id)
+    getInvoice(id, token, location.state?.accessToken)
       .then(setInvoice)
       .catch((err) => setError(err.message));
-  }, [id]);
+  }, [id, token, location.state]);
 
   if (error) return <p className="status-text error">{error}</p>;
   if (!invoice) return <p className="status-text">Loading invoice…</p>;

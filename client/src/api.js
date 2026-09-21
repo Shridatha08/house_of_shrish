@@ -21,12 +21,26 @@ export const getMenu = () => request('/api/menu');
 export const placeOrder = (payload, token) =>
   request('/api/orders', { method: 'POST', body: JSON.stringify(payload), headers: authHeaders(token) });
 
-export const getOrder = (id) => request(`/api/orders/${id}`);
+function orderHeaders(token, accessToken) {
+  return { ...authHeaders(token), ...(accessToken ? { 'x-order-token': accessToken } : {}) };
+}
 
-export const markOrderPaid = (id) =>
-  request(`/api/orders/${id}/mark-paid`, { method: 'PATCH' });
+export const getOrder = (id, token, accessToken) =>
+  request(`/api/orders/${id}`, { headers: orderHeaders(token, accessToken) });
 
-export const getInvoice = (id) => request(`/api/orders/${id}/invoice`);
+export const markOrderPaid = (id, token, accessToken) =>
+  request(`/api/orders/${id}/mark-paid`, { method: 'PATCH', headers: orderHeaders(token, accessToken) });
+
+export const getInvoice = (id, token, accessToken) =>
+  request(`/api/orders/${id}/invoice`, { headers: orderHeaders(token, accessToken) });
+
+export const getMyOrders = (token) => request('/api/orders/me', { headers: authHeaders(token) });
+
+export const cancelOrder = (id, token, accessToken) =>
+  request(`/api/orders/${id}/cancel`, { method: 'PATCH', headers: orderHeaders(token, accessToken) });
+
+export const requestRefund = (id, token, accessToken) =>
+  request(`/api/orders/${id}/refund-request`, { method: 'POST', headers: orderHeaders(token, accessToken) });
 
 export const registerUser = (payload) =>
   request('/api/auth/register', { method: 'POST', body: JSON.stringify(payload) });
@@ -98,3 +112,13 @@ export const getAdminUsers = (adminKey) =>
 
 export const deleteAdminUser = (id, adminKey) =>
   request(`/api/admin/users/${id}`, { method: 'DELETE', headers: { 'x-admin-key': adminKey } });
+
+export const getAdminOrders = (adminKey) =>
+  request('/api/admin/orders', { headers: { 'x-admin-key': adminKey } });
+
+export const updateAdminOrderStatus = (id, status, adminKey) =>
+  request(`/api/admin/orders/${id}/status`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status }),
+    headers: { 'x-admin-key': adminKey }
+  });

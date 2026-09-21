@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { QRCodeSVG } from 'qrcode.react';
 import { markOrderPaid } from '../api';
 import { useCart } from '../context/CartContext';
+import { useAuth } from '../context/AuthContext';
 
 const WHATSAPP_LINK = 'https://wa.me/+919180381854';
 
@@ -11,10 +12,11 @@ export default function Payment() {
   const location = useLocation();
   const navigate = useNavigate();
   const { clearCart } = useCart();
+  const { token } = useAuth();
   const [stage, setStage] = useState('paying'); // 'paying' | 'awaiting-proof' | 'confirmed'
   const [error, setError] = useState('');
 
-  const { order, upiUri } = location.state || {};
+  const { order, upiUri, accessToken } = location.state || {};
 
   if (!order || !upiUri) {
     return (
@@ -29,7 +31,7 @@ export default function Payment() {
 
   async function handleConfirmPaid() {
     try {
-      await markOrderPaid(id);
+      await markOrderPaid(id, token, accessToken);
       setStage('awaiting-proof');
       clearCart();
     } catch (err) {
@@ -43,7 +45,7 @@ export default function Payment() {
         <div className="success-card">
           <h2>🎉 Order confirmed!</h2>
           <p>Order #{order.orderNumber || order.id} for ₹{order.total} has been placed.</p>
-          <Link to={`/invoice/${order.id}`} className="btn-link">View Invoice</Link>
+          <Link to={`/invoice/${order.id}`} state={{ accessToken }} className="btn-link">View Invoice</Link>
           <button className="btn-primary" onClick={() => navigate('/')}>Back to menu</button>
         </div>
       </div>
