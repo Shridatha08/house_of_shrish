@@ -638,17 +638,6 @@ app.post('/api/orders', async (req, res) => {
   res.status(201).json({ order: { ...order, accessToken: undefined }, upiUri, accessToken });
 });
 
-// GET /api/orders/:id - fetch a single order's status
-app.get('/api/orders/:id', async (req, res) => {
-  const db = await getDb();
-  const order = db.data.orders.find((o) => o.id === Number(req.params.id));
-  if (!order) return res.status(404).json({ error: 'Order not found.' });
-  const user = await getUserFromToken(db, req);
-  if (!canAccessOrder(order, user, req)) return res.status(403).json({ error: 'You cannot access this order.' });
-  const { accessToken, ...safeOrder } = order;
-  res.json(safeOrder);
-});
-
 // PATCH /api/orders/:id/mark-paid - mark an order as paid (called once user confirms payment)
 app.patch('/api/orders/:id/mark-paid', async (req, res) => {
   const db = await getDb();
@@ -670,6 +659,17 @@ app.get('/api/orders/me', async (req, res) => {
   const user = await getUserFromToken(db, req);
   if (!user) return res.status(401).json({ error: 'Not signed in.' });
   res.json(db.data.orders.filter((order) => order.userId === user.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(({ accessToken, ...order }) => order));
+});
+
+// GET /api/orders/:id - fetch a single order's status
+app.get('/api/orders/:id', async (req, res) => {
+  const db = await getDb();
+  const order = db.data.orders.find((o) => o.id === Number(req.params.id));
+  if (!order) return res.status(404).json({ error: 'Order not found.' });
+  const user = await getUserFromToken(db, req);
+  if (!canAccessOrder(order, user, req)) return res.status(403).json({ error: 'You cannot access this order.' });
+  const { accessToken, ...safeOrder } = order;
+  res.json(safeOrder);
 });
 
 // PATCH /api/orders/:id/cancel - customer cancellation before fulfillment
