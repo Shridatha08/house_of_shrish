@@ -178,15 +178,6 @@
   transform: translateY(-2px);
 }
 
-.menu-product-image {
-  display: block;
-  width: 100%;
-  height: 140px;
-  object-fit: cover;
-  border-radius: 6px;
-  margin-bottom: 12px;
-}
-
 .menu-card-heading {
   display: flex;
   align-items: center;

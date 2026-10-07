@@ -13,7 +13,8 @@ import goGreenIcon from '../../../go-green.png';
 
 const CATEGORY_BANNERS = {
   'Pure Veg Meals': mealsImg,
-  'Artisanal Chocolates': chocolateImg
+  'Artisanal Chocolates': chocolateImg,
+  'Artisanal Sweets': ladooImg
 };
 
 // Extracts the "Lunch" / "Dinner" / "Lunch + Dinner" part from a name like "Monthly (Lunch)".
@@ -116,7 +117,6 @@ export default function Menu() {
               {regularItems.map((item) => (
                 <div key={item.id} className="menu-card">
                   <div className="menu-card-body">
-                    {item.id === 6 && <img src={ladooImg} alt="Dry Fruits Ladoo" className="menu-product-image" />}
                     <div className="menu-card-heading">
                       <span className="veg-badge" title="Pure Veg" />
                       <h3>{item.name}</h3>
