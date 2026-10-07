@@ -133,6 +133,7 @@ export default function Menu() {
                       <CustomisationPicker
                         item={item}
                         selected={customisationFor(item)}
+                        hideLabel={item.name === 'Dry Fruits Ladoo'}
                         onSelect={(option) =>
                           setSelectedCustomisation((prev) => ({ ...prev, [item.id]: option }))
                         }
