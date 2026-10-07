@@ -431,7 +431,7 @@ export default function AdminHolidays() {
                 <span className="subscription-badge active">{order.status.replaceAll('_', ' ')}</span>
               </div>
               <p className="subscription-item-name">{order.items.map((item) => `${item.name} × ${item.quantity}`).join(', ')}</p>
-              <p className="subscription-summary-dates">₹{order.total} · Delivery: {order.scheduledDate} · {order.timeSlot}</p>
+              <p className="subscription-summary-dates">₹{order.total} · Delivery: {order.scheduledDate ? `${order.scheduledDate} · ${order.timeSlot}` : 'No scheduled delivery'}</p>
               <p className="subscription-summary-dates">{order.customer.address}</p>
               <div className="order-actions">
                 {['paid', 'preparing'].includes(order.status) && <button type="button" className="btn-add" onClick={() => handleOrderStatus(order, 'preparing')} disabled={updatingOrderId === order.id}>Preparing</button>}

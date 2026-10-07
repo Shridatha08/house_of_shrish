@@ -618,24 +618,34 @@ app.post('/api/orders', async (req, res) => {
   if (typeof customer.address !== 'string' || !customer.address.trim()) {
     return res.status(400).json({ error: 'Delivery address is required.' });
   }
-  if (!isValidDateString(scheduledDate) || scheduledDate < todayStr()) {
-    return res.status(400).json({ error: 'Choose a valid delivery date from today onward.' });
-  }
-  if (!isValidTimeSlot(timeSlot)) {
-    return res.status(400).json({ error: 'Choose a valid delivery time slot.' });
-  }
-
   const db = await getDb();
   const settings = getSettings(db.data);
   if (settings.orderingPaused) return res.status(409).json({ error: 'Ordering is temporarily paused.' });
-  if (settings.kitchenClosedDates.includes(scheduledDate)) return res.status(409).json({ error: 'The kitchen is closed on the selected date.' });
-  if (!settings.deliveryTimeSlots.includes(timeSlot)) return res.status(400).json({ error: 'Choose one of the available delivery time slots.' });
-  if (!isBeforeCutoff(scheduledDate, settings.orderCutoffTime)) return res.status(409).json({ error: `Orders for today close at ${settings.orderCutoffTime} UTC.` });
-  const scheduledOrders = db.data.orders.filter((order) => order.scheduledDate === scheduledDate && !['cancelled', 'refunded'].includes(order.status));
-  const scheduledQuantity = scheduledOrders.reduce((sum, order) => sum + order.items.reduce((items, item) => items + item.quantity, 0), 0);
-  const requestedQuantity = items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
-  if (scheduledQuantity + requestedQuantity > settings.dailyOrderCapacity) return res.status(409).json({ error: 'That delivery date has reached kitchen capacity.' });
   const menuById = new Map(db.data.menu.map((item) => [item.id, item]));
+  const requiresDeliverySchedule = items.some((line) => menuById.get(Number(line.id))?.category === 'Pure Veg Meals');
+  if (requiresDeliverySchedule && (!isValidDateString(scheduledDate) || scheduledDate < todayStr())) {
+    return res.status(400).json({ error: 'Choose a valid delivery date from today onward.' });
+  }
+  if (requiresDeliverySchedule && !isValidTimeSlot(timeSlot)) {
+    return res.status(400).json({ error: 'Choose a valid delivery time slot.' });
+  }
+  const orderDate = requiresDeliverySchedule ? scheduledDate : null;
+  const orderTimeSlot = requiresDeliverySchedule ? timeSlot : null;
+  if (requiresDeliverySchedule && settings.kitchenClosedDates.includes(orderDate)) return res.status(409).json({ error: 'The kitchen is closed on the selected date.' });
+  if (requiresDeliverySchedule && !settings.deliveryTimeSlots.includes(orderTimeSlot)) return res.status(400).json({ error: 'Choose one of the available delivery time slots.' });
+  if (requiresDeliverySchedule && !isBeforeCutoff(orderDate, settings.orderCutoffTime)) return res.status(409).json({ error: `Orders for today close at ${settings.orderCutoffTime} UTC.` });
+  const scheduledOrders = requiresDeliverySchedule
+    ? db.data.orders.filter((order) => order.scheduledDate === orderDate && !['cancelled', 'refunded'].includes(order.status))
+    : [];
+  const stockDate = orderDate || todayStr();
+  const stockOrders = db.data.orders.filter((order) =>
+    (order.scheduledDate || order.createdAt?.slice(0, 10)) === stockDate && !['cancelled', 'refunded'].includes(order.status)
+  );
+  if (requiresDeliverySchedule) {
+    const scheduledQuantity = scheduledOrders.reduce((sum, order) => sum + order.items.reduce((items, item) => items + item.quantity, 0), 0);
+    const requestedQuantity = items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+    if (scheduledQuantity + requestedQuantity > settings.dailyOrderCapacity) return res.status(409).json({ error: 'That delivery date has reached kitchen capacity.' });
+  }
 
   const user = await getUserFromToken(db, req);
   const requiresAccount = items.some((line) => {
@@ -656,7 +666,7 @@ app.post('/api/orders', async (req, res) => {
     }
     if (menuItem.available === false) return res.status(409).json({ error: `${menuItem.name} is currently unavailable.` });
     if (Number.isInteger(menuItem.dailyStock)) {
-      const alreadyOrdered = scheduledOrders.reduce((sum, order) => sum + order.items.filter((item) => item.id === menuItem.id).reduce((items, item) => items + item.quantity, 0), 0);
+      const alreadyOrdered = stockOrders.reduce((sum, order) => sum + order.items.filter((item) => item.id === menuItem.id).reduce((items, item) => items + item.quantity, 0), 0);
       if (alreadyOrdered + quantity > menuItem.dailyStock) return res.status(409).json({ error: `${menuItem.name} has reached its daily stock limit.` });
     }
     let customisation = '';
@@ -688,8 +698,8 @@ app.post('/api/orders', async (req, res) => {
     total,
     userId: user?.id || null,
     accessToken,
-    scheduledDate,
-    timeSlot,
+    scheduledDate: orderDate,
+    timeSlot: orderTimeSlot,
     customer: {
       name: customer.name.trim(),
       phone: customer.phone.trim(),

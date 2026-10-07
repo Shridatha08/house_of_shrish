@@ -146,7 +146,7 @@ export default function Profile() {
                 <span className={`subscription-badge ${order.status === 'delivered' ? 'active' : order.status === 'cancelled' || order.status === 'refunded' ? 'expired' : order.status === 'refund_requested' ? 'pending' : 'expiring'}`}>{order.status.replaceAll('_', ' ')}</span>
               </div>
               <p className="subscription-summary-dates">
-                {order.scheduledDate} · {order.timeSlot} · ₹{order.total}
+                {order.scheduledDate ? `${order.scheduledDate} · ${order.timeSlot} · ` : 'No scheduled delivery · '}₹{order.total}
               </p>
               <p className="subscription-summary-dates">Payment / delivery status: {order.status.replaceAll('_', ' ')}</p>
               <p className="subscription-summary-dates">{order.items.map((item) => `${item.name} × ${item.quantity}`).join(', ')}</p>

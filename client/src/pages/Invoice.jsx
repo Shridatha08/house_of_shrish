@@ -38,7 +38,7 @@ export default function Invoice() {
             <p><strong>Order No:</strong> #{invoice.orderNumber}</p>
             <p><strong>Date:</strong> {formatDate(invoice.date)}</p>
             <p><strong>Status:</strong> {invoice.status?.replaceAll('_', ' ')}</p>
-            <p><strong>Delivery:</strong> {invoice.scheduledDate} · {invoice.timeSlot}</p>
+            <p><strong>Delivery:</strong> {invoice.scheduledDate ? `${invoice.scheduledDate} · ${invoice.timeSlot}` : 'No scheduled delivery'}</p>
           </div>
         </div>
 
