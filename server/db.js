@@ -15,7 +15,7 @@ const defaultData = {
     {
       id: 6,
       name: 'Dry Fruits Ladoo',
-      description: 'Rich ladoos made with dry fruits.',
+      description: 'Naturally sweetened with dates, made with premium dry fruits and crafted with care',
       price: 299,
       category: 'Artisanal Sweets',
       image: 'ladoo.png',
@@ -85,6 +85,9 @@ export async function getDb() {
     menuMigrated = true;
   } else if (!Array.isArray(existingLadoo.variants)) {
     Object.assign(existingLadoo, structuredClone(ladoo));
+    menuMigrated = true;
+  } else if (existingLadoo.description !== ladoo.description) {
+    existingLadoo.description = ladoo.description;
     menuMigrated = true;
   }
   if (menuMigrated) {
