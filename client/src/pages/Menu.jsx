@@ -63,7 +63,7 @@ export default function Menu() {
 
   function customisationFor(item) {
     if (!item.customisations?.length && !item.variants?.length) return undefined;
-    return selectedCustomisation[item.id] ?? item.customisations[0];
+    return selectedCustomisation[item.id] ?? item.variants?.[0]?.label ?? item.customisations?.[0];
   }
 
   const quantityOf = (item) => {
