@@ -604,7 +604,7 @@ app.patch('/api/admin/orders/:id/status', async (req, res) => {
 
 // POST /api/orders - place a new order
 app.post('/api/orders', async (req, res) => {
-  const { items, customer, scheduledDate, timeSlot } = req.body || {};
+  const { items, customer } = req.body || {};
 
   if (!Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: 'Order must include at least one item.' });
@@ -621,31 +621,17 @@ app.post('/api/orders', async (req, res) => {
   const db = await getDb();
   const settings = getSettings(db.data);
   if (settings.orderingPaused) return res.status(409).json({ error: 'Ordering is temporarily paused.' });
-  const menuById = new Map(db.data.menu.map((item) => [item.id, item]));
-  const requiresDeliverySchedule = items.some((line) => menuById.get(Number(line.id))?.category === 'Pure Veg Meals');
-  if (requiresDeliverySchedule && (!isValidDateString(scheduledDate) || scheduledDate < todayStr())) {
-    return res.status(400).json({ error: 'Choose a valid delivery date from today onward.' });
-  }
-  if (requiresDeliverySchedule && !isValidTimeSlot(timeSlot)) {
-    return res.status(400).json({ error: 'Choose a valid delivery time slot.' });
-  }
-  const orderDate = requiresDeliverySchedule ? scheduledDate : null;
-  const orderTimeSlot = requiresDeliverySchedule ? timeSlot : null;
-  if (requiresDeliverySchedule && settings.kitchenClosedDates.includes(orderDate)) return res.status(409).json({ error: 'The kitchen is closed on the selected date.' });
-  if (requiresDeliverySchedule && !settings.deliveryTimeSlots.includes(orderTimeSlot)) return res.status(400).json({ error: 'Choose one of the available delivery time slots.' });
-  if (requiresDeliverySchedule && !isBeforeCutoff(orderDate, settings.orderCutoffTime)) return res.status(409).json({ error: `Orders for today close at ${settings.orderCutoffTime} UTC.` });
-  const scheduledOrders = requiresDeliverySchedule
-    ? db.data.orders.filter((order) => order.scheduledDate === orderDate && !['cancelled', 'refunded'].includes(order.status))
-    : [];
-  const stockDate = orderDate || todayStr();
-  const stockOrders = db.data.orders.filter((order) =>
-    (order.scheduledDate || order.createdAt?.slice(0, 10)) === stockDate && !['cancelled', 'refunded'].includes(order.status)
+  const today = todayStr();
+  if (settings.kitchenClosedDates.includes(today)) return res.status(409).json({ error: 'The kitchen is closed today.' });
+  if (!isBeforeCutoff(today, settings.orderCutoffTime)) return res.status(409).json({ error: `Orders for today close at ${settings.orderCutoffTime} UTC.` });
+  const todaysOrders = db.data.orders.filter((order) =>
+    order.createdAt?.slice(0, 10) === today && !['cancelled', 'refunded'].includes(order.status)
   );
-  if (requiresDeliverySchedule) {
-    const scheduledQuantity = scheduledOrders.reduce((sum, order) => sum + order.items.reduce((items, item) => items + item.quantity, 0), 0);
-    const requestedQuantity = items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
-    if (scheduledQuantity + requestedQuantity > settings.dailyOrderCapacity) return res.status(409).json({ error: 'That delivery date has reached kitchen capacity.' });
-  }
+  const todaysQuantity = todaysOrders.reduce((sum, order) => sum + order.items.reduce((items, item) => items + item.quantity, 0), 0);
+  const requestedQuantity = items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+  if (todaysQuantity + requestedQuantity > settings.dailyOrderCapacity) return res.status(409).json({ error: 'Kitchen capacity for today has been reached.' });
+  const stockOrders = todaysOrders;
+  const menuById = new Map(db.data.menu.map((item) => [item.id, item]));
 
   const user = await getUserFromToken(db, req);
   const requiresAccount = items.some((line) => {
@@ -698,8 +684,8 @@ app.post('/api/orders', async (req, res) => {
     total,
     userId: user?.id || null,
     accessToken,
-    scheduledDate: orderDate,
-    timeSlot: orderTimeSlot,
+    scheduledDate: null,
+    timeSlot: null,
     customer: {
       name: customer.name.trim(),
       phone: customer.phone.trim(),

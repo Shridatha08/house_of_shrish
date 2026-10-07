@@ -7,7 +7,7 @@ function makeKey(id, customisation) {
 }
 
 export function CartProvider({ children }) {
-  const [items, setItems] = useState([]); // { key, id, name, category, price, quantity, customisation }
+  const [items, setItems] = useState([]); // { key, id, name, price, quantity, customisation }
 
   function addItem(menuItem, customisation) {
     const key = makeKey(menuItem.id, customisation);
@@ -22,7 +22,7 @@ export function CartProvider({ children }) {
       }
       return [
         ...prev,
-        { key, id: menuItem.id, name: menuItem.name, category: menuItem.category, price, quantity: 1, customisation: customisation || '' }
+        { key, id: menuItem.id, name: menuItem.name, price, quantity: 1, customisation: customisation || '' }
       ];
     });
   }

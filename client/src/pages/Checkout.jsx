@@ -14,15 +14,10 @@ export default function Checkout() {
   const [phone, setPhone] = useState('');
   const [address, setAddress] = useState('');
   const [position, setPosition] = useState(null);
-  const [scheduledDate, setScheduledDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [timeSlot, setTimeSlot] = useState('11:00-13:00');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   const requiresAccount = items.some((i) => i.name.toLowerCase().startsWith('monthly'));
-  const requiresDeliverySchedule = items.some((item) =>
-    item.category === 'Pure Veg Meals' || item.name.toLowerCase() === 'single meal' || item.name.toLowerCase().startsWith('monthly')
-  );
   const blockedByAuth = requiresAccount && !user;
 
   // Prefill delivery details from the saved profile for logged-in users.
@@ -74,9 +69,7 @@ export default function Checkout() {
             address,
             lat: position?.lat ?? null,
             lng: position?.lng ?? null
-          },
-          scheduledDate: requiresDeliverySchedule ? scheduledDate : null,
-          timeSlot: requiresDeliverySchedule ? timeSlot : null
+          }
         },
         token
       );
@@ -144,22 +137,6 @@ export default function Checkout() {
           Delivery address
           <textarea value={address} onChange={(e) => setAddress(e.target.value)} rows={3} required />
         </label>
-        {requiresDeliverySchedule && (
-          <div className="checkout-inline-fields">
-            <label>
-              Delivery date
-              <input type="date" value={scheduledDate} min={new Date().toISOString().slice(0, 10)} onChange={(e) => setScheduledDate(e.target.value)} required />
-            </label>
-            <label>
-              Time slot
-              <select value={timeSlot} onChange={(e) => setTimeSlot(e.target.value)} required>
-                <option value="11:00-13:00">11:00 AM - 1:00 PM</option>
-                <option value="18:00-20:00">6:00 PM - 8:00 PM</option>
-              </select>
-            </label>
-          </div>
-        )}
-
         <div className="location-section">
           <div className="location-header">
             <span>Pin your location</span>
