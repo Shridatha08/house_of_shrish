@@ -5,6 +5,7 @@ import { useCart } from '../context/CartContext';
 import fssaiLogo from '../../../fssai.png';
 import mealsImg from '../../../meals.png';
 import chocolateImg from '../../../chocolate.png';
+import ladooImg from '../../../ladoo.png';
 import phoneIcon from '../../../phone-call.png';
 import whatsappIcon from '../../../whatsapp.png';
 import instagramIcon from '../../../instagram.png';
@@ -22,19 +23,20 @@ function planLabel(name) {
 }
 
 function CustomisationPicker({ item, selected, onSelect, hideLabel }) {
+  const options = item.variants || item.customisations.map((label) => ({ label }));
   return (
     <div className="customisation-group">
       {!hideLabel && <span className="customisation-label">Choose your meal</span>}
       <div className="customisation-options">
-        {item.customisations.map((option, idx) => (
+        {options.map((option, idx) => (
           <button
-            key={option}
+            key={option.label}
             type="button"
-            className={selected === option ? 'customisation-pill active' : 'customisation-pill'}
-            onClick={() => onSelect(option)}
+            className={selected === option.label ? 'customisation-pill active' : 'customisation-pill'}
+            onClick={() => onSelect(option.label)}
           >
             <span className="customisation-pill-title">Option {idx + 1}</span>
-            <span className="customisation-pill-desc">{option}</span>
+            <span className="customisation-pill-desc">{option.label}{option.price ? ` · ₹${option.price}` : ''}</span>
           </button>
         ))}
       </div>
@@ -60,7 +62,7 @@ export default function Menu() {
   }, []);
 
   function customisationFor(item) {
-    if (!item.customisations?.length) return undefined;
+    if (!item.customisations?.length && !item.variants?.length) return undefined;
     return selectedCustomisation[item.id] ?? item.customisations[0];
   }
 
@@ -114,13 +116,16 @@ export default function Menu() {
               {regularItems.map((item) => (
                 <div key={item.id} className="menu-card">
                   <div className="menu-card-body">
+                    {item.id === 6 && <img src={ladooImg} alt="Dry Fruits Ladoo" className="menu-product-image" />}
                     <div className="menu-card-heading">
                       <span className="veg-badge" title="Pure Veg" />
                       <h3>{item.name}</h3>
                     </div>
                     <p className="menu-desc">{item.description}</p>
-                    <p className="menu-price">₹{item.price}</p>
-                    {item.customisations?.length > 0 && (
+                    {item.variants?.length > 0 ? (
+                      <p className="menu-price">₹{Math.min(...item.variants.map((variant) => variant.price))} - ₹{Math.max(...item.variants.map((variant) => variant.price))}</p>
+                    ) : <p className="menu-price">₹{item.price}</p>}
+                    {(item.customisations?.length > 0 || item.variants?.length > 0) && (
                       <CustomisationPicker
                         item={item}
                         selected={customisationFor(item)}

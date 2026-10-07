@@ -660,14 +660,20 @@ app.post('/api/orders', async (req, res) => {
       if (alreadyOrdered + quantity > menuItem.dailyStock) return res.status(409).json({ error: `${menuItem.name} has reached its daily stock limit.` });
     }
     let customisation = '';
-    if (Array.isArray(menuItem.customisations) && menuItem.customisations.length > 0) {
+    let unitPrice = menuItem.price;
+    if (Array.isArray(menuItem.variants) && menuItem.variants.length > 0) {
+      const variant = menuItem.variants.find((option) => option.label === line.customisation);
+      if (!variant) return res.status(400).json({ error: `Choose a valid size for ${menuItem.name}.` });
+      customisation = variant.label;
+      unitPrice = variant.price;
+    } else if (Array.isArray(menuItem.customisations) && menuItem.customisations.length > 0) {
       if (!menuItem.customisations.includes(line.customisation)) {
         return res.status(400).json({ error: `Invalid customisation for ${menuItem.name}.` });
       }
       customisation = line.customisation;
     }
-    total += menuItem.price * quantity;
-    orderItems.push({ id: menuItem.id, name: menuItem.name, price: menuItem.price, quantity, customisation });
+    total += unitPrice * quantity;
+    orderItems.push({ id: menuItem.id, name: menuItem.name, price: unitPrice, quantity, customisation });
   }
 
   const orderId = Date.now();

@@ -402,6 +402,14 @@
 
 .contact-section {
   text-align: center;
+  .menu-product-image {
+    display: block;
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    object-fit: cover;
+    border-radius: 6px;
+    margin-bottom: 12px;
+  }
   max-width: 520px;
   margin: 20px auto 28px;
   color: #444;

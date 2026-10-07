@@ -11,6 +11,8 @@ export function CartProvider({ children }) {
 
   function addItem(menuItem, customisation) {
     const key = makeKey(menuItem.id, customisation);
+    const variant = menuItem.variants?.find((option) => option.label === customisation);
+    const price = variant?.price ?? menuItem.price;
     setItems((prev) => {
       const existing = prev.find((i) => i.key === key);
       if (existing) {
@@ -20,7 +22,7 @@ export function CartProvider({ children }) {
       }
       return [
         ...prev,
-        { key, id: menuItem.id, name: menuItem.name, price: menuItem.price, quantity: 1, customisation: customisation || '' }
+        { key, id: menuItem.id, name: menuItem.name, price, quantity: 1, customisation: customisation || '' }
       ];
     });
   }
