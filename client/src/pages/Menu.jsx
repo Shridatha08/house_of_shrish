@@ -111,7 +111,11 @@ export default function Menu() {
           <section key={category} className="menu-category">
             <h2>{category}</h2>
             {CATEGORY_BANNERS[category] && (
-              <img src={CATEGORY_BANNERS[category]} alt={category} className="category-banner" />
+              <img
+                src={CATEGORY_BANNERS[category]}
+                alt={category}
+                className={category === 'Artisanal Sweets' ? 'category-banner category-banner-ladoo' : 'category-banner'}
+              />
             )}
             <div className="menu-grid">
               {regularItems.map((item) => (
