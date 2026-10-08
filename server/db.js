@@ -86,7 +86,7 @@ export async function getDb() {
   for (const menuItem of defaultData.menu) {
     const existingItem = doc.menu.find((item) => item.id === menuItem.id);
     if (!existingItem) continue;
-    if (menuItem.id === 1 && JSON.stringify(existingItem.customisations) !== JSON.stringify(menuItem.customisations)) {
+    if (Array.isArray(menuItem.customisations) && JSON.stringify(existingItem.customisations) !== JSON.stringify(menuItem.customisations)) {
       existingItem.customisations = structuredClone(menuItem.customisations);
       menuMigrated = true;
     }
