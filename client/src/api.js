@@ -50,14 +50,14 @@ export const registerUser = (payload) =>
 export const loginUser = (payload) =>
   request('/api/auth/login', { method: 'POST', body: JSON.stringify(payload) });
 
-export const verifyPasswordResetPhone = (userJsonUrl) =>
-  request('/api/auth/password-reset/verify-phone', {
+export const requestPasswordReset = (phone) =>
+  request('/api/auth/password-reset/request', {
     method: 'POST',
-    body: JSON.stringify({ userJsonUrl })
+    body: JSON.stringify({ phone })
   });
 
-export const resetPassword = (payload) =>
-  request('/api/auth/password-reset', { method: 'POST', body: JSON.stringify(payload) });
+export const completePasswordReset = (payload) =>
+  request('/api/auth/password-reset/complete', { method: 'POST', body: JSON.stringify(payload) });
 
 export const updateProfile = (payload, token) =>
   request('/api/auth/profile', { method: 'PATCH', body: JSON.stringify(payload), headers: authHeaders(token) });
@@ -114,6 +114,15 @@ export const getAdminUsers = (adminKey) =>
 
 export const deleteAdminUser = (id, adminKey) =>
   request(`/api/admin/users/${id}`, { method: 'DELETE', headers: { 'x-admin-key': adminKey } });
+
+export const getAdminPasswordResetRequests = (adminKey) =>
+  request('/api/admin/password-reset-requests', { headers: { 'x-admin-key': adminKey } });
+
+export const issueAdminPasswordResetKey = (id, adminKey) =>
+  request(`/api/admin/password-reset-requests/${id}/issue-key`, {
+    method: 'POST',
+    headers: { 'x-admin-key': adminKey }
+  });
 
 export const getAdminOrders = (adminKey) =>
   request('/api/admin/orders', { headers: { 'x-admin-key': adminKey } });

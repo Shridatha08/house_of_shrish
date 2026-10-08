@@ -1,9 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { resetPassword, verifyPasswordResetPhone } from '../api';
-
-const PHONE_EMAIL_SCRIPT = 'https://www.phone.email/sign_in_button_v1.js';
+import { completePasswordReset, requestPasswordReset } from '../api';
 
 export default function Login() {
   const { login, register } = useAuth();
@@ -20,36 +18,12 @@ export default function Login() {
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [forgotPassword, setForgotPassword] = useState(false);
-  const [resetToken, setResetToken] = useState('');
+  const [resetRequested, setResetRequested] = useState(false);
+  const [resetPhone, setResetPhone] = useState('');
+  const [resetKey, setResetKey] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
-
-  useEffect(() => {
-    if (!forgotPassword || resetToken) return undefined;
-
-    window.phoneEmailListener = async (user) => {
-      try {
-        setError('');
-        setSubmitting(true);
-        const result = await verifyPasswordResetPhone(user?.user_json_url);
-        setResetToken(result.resetToken);
-      } catch (err) {
-        setError(err.message);
-      } finally {
-        setSubmitting(false);
-      }
-    };
-
-    const script = document.createElement('script');
-    script.src = PHONE_EMAIL_SCRIPT;
-    script.async = true;
-    document.body.appendChild(script);
-
-    return () => {
-      delete window.phoneEmailListener;
-      script.remove();
-    };
-  }, [forgotPassword, resetToken]);
+  const [notice, setNotice] = useState('');
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -73,6 +47,22 @@ export default function Login() {
     }
   }
 
+  async function handleRequestReset(e) {
+    e.preventDefault();
+    setError('');
+    setNotice('');
+    setSubmitting(true);
+    try {
+      await requestPasswordReset(resetPhone);
+      setResetRequested(true);
+      setNotice('If an account exists for that number, a reset request has been sent to the admin. Contact the admin for your unique reset key.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   async function handleResetPassword(e) {
     e.preventDefault();
     setError('');
@@ -82,12 +72,15 @@ export default function Login() {
     }
     setSubmitting(true);
     try {
-      await resetPassword({ resetToken, password: newPassword });
+      await completePasswordReset({ phone: resetPhone, resetKey, password: newPassword });
       setForgotPassword(false);
-      setResetToken('');
+      setResetRequested(false);
+      setResetPhone('');
+      setResetKey('');
       setNewPassword('');
       setConfirmNewPassword('');
       setPassword('');
+      setNotice('Password reset. Log in with your new password.');
     } catch (err) {
       setError(err.message);
     } finally {
@@ -97,6 +90,9 @@ export default function Login() {
 
   function showForgotPassword() {
     setForgotPassword(true);
+    setResetPhone(phone);
+    setResetRequested(false);
+    setNotice('');
     setError('');
   }
 
@@ -107,17 +103,22 @@ export default function Login() {
         {forgotPassword ? (
           <>
             <h2>Reset password</h2>
-            {!resetToken ? (
-              <>
-                <p className="auth-help-text">Verify the mobile number registered with your account to receive an OTP.</p>
-                {import.meta.env.VITE_PHONE_EMAIL_CLIENT_ID ? (
-                  <div className="pe_signin_button" data-client-id={import.meta.env.VITE_PHONE_EMAIL_CLIENT_ID} />
-                ) : (
-                  <p className="status-text error">Phone verification is not configured yet.</p>
-                )}
-              </>
-            ) : (
+            <p className="auth-help-text">Request a reset key using your registered phone number. The admin will share a unique key with you.</p>
+            <form className="checkout-form" onSubmit={handleRequestReset}>
+              <label>
+                Registered phone number
+                <input value={resetPhone} onChange={(e) => setResetPhone(e.target.value)} maxLength={10} inputMode="numeric" placeholder="10-digit mobile number" required />
+              </label>
+              <button className="btn-primary" type="submit" disabled={submitting}>
+                {submitting ? 'Please wait…' : 'Request reset key'}
+              </button>
+            </form>
+            {resetRequested && (
               <form className="checkout-form" onSubmit={handleResetPassword}>
+                <label>
+                  Unique reset key
+                  <input value={resetKey} onChange={(e) => setResetKey(e.target.value)} autoComplete="one-time-code" required />
+                </label>
                 <label>
                   New password
                   <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} minLength={6} required />
@@ -131,8 +132,9 @@ export default function Login() {
                 </button>
               </form>
             )}
+            {notice && <p className="status-text">{notice}</p>}
             {error && <p className="status-text error">{error}</p>}
-            <button className="btn-link forgot-password-link" type="button" onClick={() => { setForgotPassword(false); setError(''); }}>
+            <button className="btn-link forgot-password-link" type="button" onClick={() => { setForgotPassword(false); setResetRequested(false); setError(''); }}>
               Back to login
             </button>
           </>
@@ -202,6 +204,7 @@ export default function Login() {
           )}
 
           {error && <p className="status-text error">{error}</p>}
+          {notice && <p className="status-text">{notice}</p>}
 
           {mode === 'login' && (
             <button className="btn-link forgot-password-link" type="button" onClick={showForgotPassword}>

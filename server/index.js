@@ -226,67 +226,66 @@ app.post('/api/auth/login', authRateLimit, async (req, res) => {
   res.json({ user: publicUser(user), token });
 });
 
-// POST /api/auth/password-reset/verify-phone - exchange a Phone.Email verification URL for a reset token
-app.post('/api/auth/password-reset/verify-phone', authRateLimit, async (req, res) => {
-  const { userJsonUrl } = req.body || {};
-  let verificationUrl;
-  try {
-    verificationUrl = new URL(userJsonUrl);
-  } catch {
-    return res.status(400).json({ error: 'A valid Phone.Email verification is required.' });
-  }
-  if (verificationUrl.protocol !== 'https:' || verificationUrl.hostname !== 'user.phone.email') {
-    return res.status(400).json({ error: 'Invalid Phone.Email verification URL.' });
-  }
-
-  let verifiedUser;
-  try {
-    const verificationResponse = await fetch(verificationUrl, { signal: AbortSignal.timeout(10_000) });
-    if (!verificationResponse.ok) throw new Error('Phone.Email verification failed.');
-    verifiedUser = await verificationResponse.json();
-  } catch {
-    return res.status(400).json({ error: 'Phone verification could not be confirmed. Please try again.' });
-  }
-
-  const countryCode = String(verifiedUser.user_country_code || '').replace(/\D/g, '');
-  const phoneNumber = String(verifiedUser.user_phone_number || '').replace(/\D/g, '');
-  const phone = countryCode === '91' && phoneNumber.length === 10 ? phoneNumber : '';
-  if (!phone) {
-    return res.status(400).json({ error: 'Please verify the 10-digit mobile number registered with this account.' });
-  }
+// POST /api/auth/password-reset/request - queue an admin-approved reset request
+app.post('/api/auth/password-reset/request', authRateLimit, async (req, res) => {
+  const phone = typeof req.body?.phone === 'string' ? req.body.phone.trim() : '';
+  if (!/^\d{10}$/.test(phone)) return res.status(400).json({ error: 'Enter a valid 10-digit phone number.' });
 
   const db = await getDb();
   const user = db.data.users.find((candidate) => candidate.phone === phone);
-  if (!user) {
-    return res.status(404).json({ error: 'No account is registered with this phone number.' });
+  if (user) {
+    db.data.passwordResetRequests ||= [];
+    const now = Date.now();
+    const activeRequest = db.data.passwordResetRequests.find((entry) =>
+      entry.userId === user.id && (entry.status === 'pending' || (entry.status === 'key_issued' && entry.expiresAt > now))
+    );
+    if (!activeRequest) {
+      db.data.passwordResetRequests.push({
+        id: crypto.randomBytes(12).toString('hex'),
+        userId: user.id,
+        phone: user.phone,
+        status: 'pending',
+        requestedAt: new Date(now).toISOString()
+      });
+      await db.write();
+    }
   }
 
-  const now = Date.now();
-  db.data.passwordResetTokens = (db.data.passwordResetTokens || []).filter((entry) => entry.expiresAt > now);
-  const resetToken = crypto.randomBytes(32).toString('hex');
-  db.data.passwordResetTokens.push({ token: resetToken, userId: user.id, expiresAt: now + 10 * 60 * 1000 });
-  await db.write();
-  res.json({ resetToken });
+  res.status(202).json({ message: 'If an account exists for that number, a reset request has been sent to the admin.' });
 });
 
-// POST /api/auth/password-reset - set a new password after Phone.Email verification
-app.post('/api/auth/password-reset', authRateLimit, async (req, res) => {
-  const { resetToken, password } = req.body || {};
+// POST /api/auth/password-reset/complete - consume a one-time key issued by an admin
+app.post('/api/auth/password-reset/complete', authRateLimit, async (req, res) => {
+  const phone = typeof req.body?.phone === 'string' ? req.body.phone.trim() : '';
+  const resetKey = typeof req.body?.resetKey === 'string' ? req.body.resetKey.trim().toUpperCase() : '';
+  const { password } = req.body || {};
+  if (!/^\d{10}$/.test(phone)) return res.status(400).json({ error: 'Enter a valid 10-digit phone number.' });
   if (typeof password !== 'string' || password.length < 6) {
     return res.status(400).json({ error: 'Password must be at least 6 characters.' });
   }
 
   const db = await getDb();
+  db.data.passwordResetRequests ||= [];
+  const user = db.data.users.find((candidate) => candidate.phone === phone);
   const now = Date.now();
-  db.data.passwordResetTokens = (db.data.passwordResetTokens || []).filter((entry) => entry.expiresAt > now);
-  const resetEntry = db.data.passwordResetTokens.find((entry) => entry.token === resetToken);
-  if (!resetEntry) return res.status(400).json({ error: 'This reset link has expired. Verify your phone number again.' });
-
-  const user = db.data.users.find((candidate) => candidate.id === resetEntry.userId);
-  if (!user) return res.status(404).json({ error: 'Account not found.' });
+  const resetRequest = user && db.data.passwordResetRequests
+    .filter((entry) => entry.userId === user.id && entry.status === 'key_issued' && entry.expiresAt > now)
+    .sort((left, right) => right.issuedAt.localeCompare(left.issuedAt))[0];
+  const suppliedHash = crypto.createHash('sha256').update(resetKey).digest();
+  const storedHash = resetRequest?.keyHash ? Buffer.from(resetRequest.keyHash, 'hex') : Buffer.alloc(0);
+  const keyMatches = storedHash.length === suppliedHash.length && crypto.timingSafeEqual(storedHash, suppliedHash);
+  if (!user || !resetRequest || !keyMatches) {
+    return res.status(400).json({ error: 'Invalid or expired reset key.' });
+  }
 
   user.passwordHash = await bcrypt.hash(password, 10);
-  db.data.passwordResetTokens = db.data.passwordResetTokens.filter((entry) => entry.token !== resetToken);
+  for (const entry of db.data.passwordResetRequests) {
+    if (entry.userId === user.id && entry.status !== 'completed') {
+      entry.status = 'completed';
+      entry.keyHash = null;
+      entry.completedAt = new Date(now).toISOString();
+    }
+  }
   db.data.sessions = db.data.sessions.filter((session) => session.userId !== user.id);
   await db.write();
   res.status(204).end();
@@ -579,6 +578,43 @@ app.delete('/api/admin/users/:id', async (req, res) => {
   db.data.subscriptions = db.data.subscriptions.filter((s) => s.userId !== userId);
   await db.write();
   res.status(204).end();
+});
+
+// GET /api/admin/password-reset-requests - list open reset requests
+app.get('/api/admin/password-reset-requests', async (req, res) => {
+  if (req.headers['x-admin-key'] !== ADMIN_KEY) return res.status(403).json({ error: 'Invalid admin key.' });
+  const db = await getDb();
+  const usersById = new Map(db.data.users.map((user) => [user.id, user]));
+  const now = Date.now();
+  const requests = (db.data.passwordResetRequests || [])
+    .filter((entry) => entry.status !== 'completed')
+    .sort((left, right) => right.requestedAt.localeCompare(left.requestedAt))
+    .map(({ keyHash, ...entry }) => ({
+      ...entry,
+      status: entry.status === 'key_issued' && entry.expiresAt <= now ? 'expired' : entry.status,
+      customerName: usersById.get(entry.userId)?.name || 'Unknown',
+      phone: usersById.get(entry.userId)?.phone || entry.phone
+    }));
+  res.json(requests);
+});
+
+// POST /api/admin/password-reset-requests/:id/issue-key - issue a one-time key for the user
+app.post('/api/admin/password-reset-requests/:id/issue-key', async (req, res) => {
+  if (req.headers['x-admin-key'] !== ADMIN_KEY) return res.status(403).json({ error: 'Invalid admin key.' });
+  const db = await getDb();
+  db.data.passwordResetRequests ||= [];
+  const resetRequest = db.data.passwordResetRequests.find((entry) => entry.id === req.params.id);
+  if (!resetRequest || resetRequest.status === 'completed') return res.status(404).json({ error: 'Open reset request not found.' });
+
+  const now = Date.now();
+  const resetKey = crypto.randomBytes(12).toString('hex').toUpperCase();
+  const expiresAt = now + 30 * 60 * 1000;
+  resetRequest.status = 'key_issued';
+  resetRequest.keyHash = crypto.createHash('sha256').update(resetKey).digest('hex');
+  resetRequest.issuedAt = new Date(now).toISOString();
+  resetRequest.expiresAt = expiresAt;
+  await db.write();
+  res.json({ resetKey, expiresAt });
 });
 
 // GET /api/admin/orders - operational order queue

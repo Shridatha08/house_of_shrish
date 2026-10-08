@@ -28,6 +28,7 @@ const defaultData = {
   orders: [],
   users: [],
   sessions: [],
+  passwordResetRequests: [],
   subscriptions: [],
   settings: {
     subscriptionWorkingDays: 26,

@@ -15,7 +15,9 @@ import {
   getAdminOrders,
   updateAdminOrderStatus,
   getMenu,
-  updateAdminMenuItem
+  updateAdminMenuItem,
+  getAdminPasswordResetRequests,
+  issueAdminPasswordResetKey
 } from '../api';
 
 const ADMIN_KEY_STORAGE = 'houseOfShrishAdminKey';
@@ -57,6 +59,10 @@ export default function AdminHolidays() {
   const [orders, setOrders] = useState([]);
   const [ordersError, setOrdersError] = useState('');
   const [updatingOrderId, setUpdatingOrderId] = useState(null);
+  const [passwordResetRequests, setPasswordResetRequests] = useState([]);
+  const [passwordResetError, setPasswordResetError] = useState('');
+  const [issuingResetRequestId, setIssuingResetRequestId] = useState(null);
+  const [issuedResetKeys, setIssuedResetKeys] = useState({});
 
   useEffect(() => {
     const saved = sessionStorage.getItem(ADMIN_KEY_STORAGE);
@@ -91,6 +97,7 @@ export default function AdminHolidays() {
       getAdminUsers(adminKey).then(setUsers).catch(() => setUsers([]));
       getAdminOrders(adminKey).then(setOrders).catch(() => setOrders([]));
       getMenu().then(setMenuItems).catch(() => setMenuItems([]));
+      getAdminPasswordResetRequests(adminKey).then(setPasswordResetRequests).catch(() => setPasswordResetRequests([]));
     }
   }, [unlocked, adminKey]);
 
@@ -235,6 +242,22 @@ export default function AdminHolidays() {
       setOrdersError(err.message);
     } finally {
       setUpdatingOrderId(null);
+    }
+  }
+
+  async function handleIssuePasswordResetKey(resetRequest) {
+    setPasswordResetError('');
+    setIssuingResetRequestId(resetRequest.id);
+    try {
+      const result = await issueAdminPasswordResetKey(resetRequest.id, adminKey);
+      setIssuedResetKeys((previous) => ({ ...previous, [resetRequest.id]: result.resetKey }));
+      setPasswordResetRequests((previous) => previous.map((entry) => entry.id === resetRequest.id
+        ? { ...entry, status: 'key_issued', expiresAt: result.expiresAt }
+        : entry));
+    } catch (err) {
+      setPasswordResetError(err.message);
+    } finally {
+      setIssuingResetRequestId(null);
     }
   }
 
@@ -463,6 +486,40 @@ export default function AdminHolidays() {
                 disabled={removingUserId === u.id}
               >
                 {removingUserId === u.id ? 'Removing…' : '✕ Remove'}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <h2 style={{ marginTop: 32 }}>Password Reset Requests</h2>
+      {passwordResetError && <p className="status-text error">{passwordResetError}</p>}
+      {passwordResetRequests.length === 0 ? (
+        <p className="status-text">No open password reset requests.</p>
+      ) : (
+        <div className="subscription-list">
+          {passwordResetRequests.map((resetRequest) => (
+            <div key={resetRequest.id} className="subscription-card">
+              <div className="subscription-card-header">
+                <strong>{resetRequest.customerName}</strong>
+                <span>{resetRequest.phone}</span>
+                <span className={`subscription-badge ${resetRequest.status === 'pending' ? 'pending' : resetRequest.status === 'expired' ? 'expired' : 'active'}`}>
+                  {resetRequest.status === 'key_issued' ? 'Key issued' : resetRequest.status === 'expired' ? 'Key expired' : 'Pending'}
+                </span>
+              </div>
+              <p className="subscription-summary-dates">Requested {new Date(resetRequest.requestedAt).toLocaleString()}</p>
+              {issuedResetKeys[resetRequest.id] ? (
+                <p className="status-text">Share this one-time key with the user now: <strong>{issuedResetKeys[resetRequest.id]}</strong>. It expires in 30 minutes.</p>
+              ) : resetRequest.status === 'key_issued' ? (
+                <p className="subscription-summary-dates">The key was shown once and cannot be retrieved. Issue a replacement if needed.</p>
+              ) : null}
+              <button
+                type="button"
+                className="btn-add"
+                onClick={() => handleIssuePasswordResetKey(resetRequest)}
+                disabled={issuingResetRequestId === resetRequest.id}
+              >
+                {issuingResetRequestId === resetRequest.id ? 'Issuing…' : resetRequest.status === 'pending' ? 'Issue reset key' : 'Issue replacement key'}
               </button>
             </div>
           ))}
