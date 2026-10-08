@@ -4,7 +4,6 @@ import { getMenu, getStoreConfig } from '../api';
 import { useCart } from '../context/CartContext';
 import fssaiLogo from '../../../fssai.png';
 import mealsImg from '../../../meals.png';
-import chocolateImg from '../../../chocolate.png';
 import ladooImg from '../../../ladoo.png';
 import phoneIcon from '../../../phone-call.png';
 import whatsappIcon from '../../../whatsapp.png';
@@ -13,7 +12,6 @@ import goGreenIcon from '../../../go-green.png';
 
 const CATEGORY_BANNERS = {
   'Pure Veg Meals': mealsImg,
-  'Artisanal Chocolates': chocolateImg,
   'Artisanal Sweets': ladooImg
 };
 
@@ -81,7 +79,7 @@ export default function Menu() {
     <div className="menu-page">
       <section className="hero">
         <h1>Home-style Pure Veg Meals, Delivered Fresh</h1>
-        <p>Wholesome thalis, monthly meal plans &amp; handcrafted chocolates — made with care, served with love.</p>
+        <p>Wholesome thalis, monthly meal plans &amp; handcrafted dry fruits ladoo — made with care, served with love.</p>
         <div className="hero-stats">
           <div className="hero-stat">
             <strong>100%</strong>

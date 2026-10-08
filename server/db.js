@@ -11,7 +11,6 @@ const defaultData = {
     { id: 2, name: 'Monthly (Lunch)', description: 'Pure Veg Meals', price: 2999, category: 'Pure Veg Meals', image: '', customisations: MEAL_CUSTOMISATIONS },
     { id: 3, name: 'Monthly (Dinner)', description: 'Pure Veg Meals', price: 2999, category: 'Pure Veg Meals', image: '', customisations: MEAL_CUSTOMISATIONS },
     { id: 4, name: 'Monthly (Lunch + Dinner)', description: 'Pure Veg Meals', price: 5499, category: 'Pure Veg Meals', image: '', customisations: MEAL_CUSTOMISATIONS },
-    { id: 5, name: 'Signature Fruit & Nut Selection', description: 'Handcrafted with premium cocoa, roasted nuts, and dried fruits for a luxurious finish.', price: 169, category: 'Artisanal Chocolates', image: '' },
     {
       id: 6,
       name: 'Dry Fruits Ladoo',
@@ -75,6 +74,12 @@ export async function getDb() {
   if (!doc) {
     doc = { _id: 'main', ...structuredClone(defaultData) };
     await collection.insertOne(doc);
+  }
+
+  const menuWithoutChocolates = doc.menu.filter((item) => item.id !== 5 && item.category !== 'Artisanal Chocolates');
+  if (menuWithoutChocolates.length !== doc.menu.length) {
+    doc.menu = menuWithoutChocolates;
+    await collection.updateOne({ _id: 'main' }, { $set: { menu: doc.menu } });
   }
 
   const ladoo = defaultData.menu.find((item) => item.id === 6);
