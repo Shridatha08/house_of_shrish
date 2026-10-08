@@ -111,11 +111,17 @@ function getSettings(data) {
   };
 }
 
-function isBeforeCutoff(dateStr, cutoff) {
-  if (dateStr !== todayStr()) return true;
+function isBeforeCutoff(cutoff) {
   const [hours, minutes] = cutoff.split(':').map(Number);
-  const now = new Date();
-  return now.getUTCHours() * 60 + now.getUTCMinutes() < hours * 60 + minutes;
+  const currentTime = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23'
+  }).formatToParts(new Date());
+  const currentHours = Number(currentTime.find((part) => part.type === 'hour').value);
+  const currentMinutes = Number(currentTime.find((part) => part.type === 'minute').value);
+  return currentHours * 60 + currentMinutes < hours * 60 + minutes;
 }
 
 function todayStr() {
@@ -623,7 +629,7 @@ app.post('/api/orders', async (req, res) => {
   if (settings.orderingPaused) return res.status(409).json({ error: 'Ordering is temporarily paused.' });
   const today = todayStr();
   if (settings.kitchenClosedDates.includes(today)) return res.status(409).json({ error: 'The kitchen is closed today.' });
-  if (!isBeforeCutoff(today, settings.orderCutoffTime)) return res.status(409).json({ error: `Orders for today close at ${settings.orderCutoffTime} UTC.` });
+  if (!isBeforeCutoff(settings.orderCutoffTime)) return res.status(409).json({ error: `Orders for today close at ${settings.orderCutoffTime} IST.` });
   const todaysOrders = db.data.orders.filter((order) =>
     order.createdAt?.slice(0, 10) === today && !['cancelled', 'refunded'].includes(order.status)
   );

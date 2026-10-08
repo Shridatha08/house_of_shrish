@@ -289,7 +289,7 @@ export default function AdminHolidays() {
         </label>
         <label><input type="checkbox" checked={orderingPaused} onChange={(e) => setOrderingPaused(e.target.checked)} /> Pause ordering</label>
         <label>Daily order capacity<input type="number" min={1} value={dailyOrderCapacity} onChange={(e) => setDailyOrderCapacity(e.target.value)} /></label>
-        <label>Same-day order cutoff (UTC)<input type="time" value={orderCutoffTime} onChange={(e) => setOrderCutoffTime(e.target.value)} /></label>
+        <label>Same-day order cutoff (IST)<input type="time" value={orderCutoffTime} onChange={(e) => setOrderCutoffTime(e.target.value)} /></label>
         <label>Kitchen closed dates<input value={kitchenClosedDates} onChange={(e) => setKitchenClosedDates(e.target.value)} placeholder="YYYY-MM-DD, YYYY-MM-DD" /></label>
         <label>Delivery slots<input value={deliveryTimeSlots} onChange={(e) => setDeliveryTimeSlots(e.target.value)} placeholder="11:00-13:00,18:00-20:00" /></label>
         {settingsError && <p className="status-text error">{settingsError}</p>}
