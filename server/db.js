@@ -1,7 +1,7 @@
 import { MongoClient } from 'mongodb';
 
 const MEAL_CUSTOMISATIONS = [
-  '2 Roti, Vegetable curry, Flavourful rice, Curd, Vegetable/Fruit Salad',
+  '3 Roti, Vegetable curry, Flavourful rice, Curd, Vegetable/Fruit Salad',
   '4 Roti, Vegetable curry, Curd, Vegetable/Fruit Salad'
 ];
 
@@ -10,7 +10,7 @@ const defaultData = {
     { id: 1, name: 'Single Meal', description: 'Pure Veg Meals', price: 119, category: 'Pure Veg Meals', image: '', customisations: MEAL_CUSTOMISATIONS },
     { id: 2, name: 'Monthly (Lunch)', description: 'Pure Veg Meals', price: 2999, category: 'Pure Veg Meals', image: '', customisations: MEAL_CUSTOMISATIONS },
     { id: 3, name: 'Monthly (Dinner)', description: 'Pure Veg Meals', price: 2999, category: 'Pure Veg Meals', image: '', customisations: MEAL_CUSTOMISATIONS },
-    { id: 4, name: 'Monthly (Lunch + Dinner)', description: 'Pure Veg Meals', price: 5499, category: 'Pure Veg Meals', image: '', customisations: MEAL_CUSTOMISATIONS },
+    { id: 4, name: 'Monthly (Lunch + Dinner)', description: 'Pure Veg Meals', price: 5999, category: 'Pure Veg Meals', image: '', customisations: MEAL_CUSTOMISATIONS },
     {
       id: 6,
       name: 'Dry Fruits Ladoo',
@@ -82,9 +82,22 @@ export async function getDb() {
     await collection.updateOne({ _id: 'main' }, { $set: { menu: doc.menu } });
   }
 
+  let menuMigrated = false;
+  for (const menuItem of defaultData.menu) {
+    const existingItem = doc.menu.find((item) => item.id === menuItem.id);
+    if (!existingItem) continue;
+    if (menuItem.id === 1 && JSON.stringify(existingItem.customisations) !== JSON.stringify(menuItem.customisations)) {
+      existingItem.customisations = structuredClone(menuItem.customisations);
+      menuMigrated = true;
+    }
+    if (menuItem.id === 4 && existingItem.price !== menuItem.price) {
+      existingItem.price = menuItem.price;
+      menuMigrated = true;
+    }
+  }
+
   const ladoo = defaultData.menu.find((item) => item.id === 6);
   const existingLadoo = doc.menu.find((item) => item.id === ladoo.id);
-  let menuMigrated = false;
   if (!existingLadoo) {
     doc.menu.push(structuredClone(ladoo));
     menuMigrated = true;
