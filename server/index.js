@@ -629,7 +629,14 @@ app.post('/api/orders', async (req, res) => {
   if (settings.orderingPaused) return res.status(409).json({ error: 'Ordering is temporarily paused.' });
   const today = todayStr();
   if (settings.kitchenClosedDates.includes(today)) return res.status(409).json({ error: 'The kitchen is closed today.' });
-  if (!isBeforeCutoff(settings.orderCutoffTime)) return res.status(409).json({ error: `Orders for today close at ${settings.orderCutoffTime} IST.` });
+  const menuById = new Map(db.data.menu.map((item) => [item.id, item]));
+  const cutoffExempt = items.every((line) => {
+    const menuItem = menuById.get(Number(line.id));
+    return menuItem && (menuItem.name.toLowerCase().startsWith('monthly') || menuItem.id === 6);
+  });
+  if (!cutoffExempt && !isBeforeCutoff(settings.orderCutoffTime)) {
+    return res.status(409).json({ error: `Orders for today close at ${settings.orderCutoffTime} IST.` });
+  }
   const todaysOrders = db.data.orders.filter((order) =>
     order.createdAt?.slice(0, 10) === today && !['cancelled', 'refunded'].includes(order.status)
   );
@@ -637,7 +644,6 @@ app.post('/api/orders', async (req, res) => {
   const requestedQuantity = items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
   if (todaysQuantity + requestedQuantity > settings.dailyOrderCapacity) return res.status(409).json({ error: 'Kitchen capacity for today has been reached.' });
   const stockOrders = todaysOrders;
-  const menuById = new Map(db.data.menu.map((item) => [item.id, item]));
 
   const user = await getUserFromToken(db, req);
   const requiresAccount = items.some((line) => {
