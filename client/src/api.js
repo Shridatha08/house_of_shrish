@@ -83,6 +83,13 @@ export const verifyAdminKey = (adminKey) =>
 export const getMySubscriptions = (token) =>
   request('/api/subscriptions/me', { headers: authHeaders(token) });
 
+export const skipSubscriptionMeal = (subscriptionId, payload, token) =>
+  request(`/api/subscriptions/${subscriptionId}/skip`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+    headers: authHeaders(token)
+  });
+
 export const getAdminSettings = (adminKey) =>
   request('/api/admin/settings', { headers: { 'x-admin-key': adminKey } });
 
@@ -95,6 +102,13 @@ export const updateAdminSettings = (payload, adminKey) =>
 
 export const getAdminSubscriptions = (adminKey) =>
   request('/api/admin/subscriptions', { headers: { 'x-admin-key': adminKey } });
+
+export const addAdminSubscription = (payload, adminKey) =>
+  request('/api/admin/subscriptions', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+    headers: { 'x-admin-key': adminKey }
+  });
 
 export const updateAdminSubscription = (id, payload, adminKey) =>
   request(`/api/admin/subscriptions/${id}`, {

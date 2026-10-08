@@ -17,7 +17,8 @@ import {
   getMenu,
   updateAdminMenuItem,
   getAdminPasswordResetRequests,
-  issueAdminPasswordResetKey
+  issueAdminPasswordResetKey,
+  addAdminSubscription
 } from '../api';
 
 const ADMIN_KEY_STORAGE = 'houseOfShrishAdminKey';
@@ -52,6 +53,12 @@ export default function AdminHolidays() {
   const [subsError, setSubsError] = useState('');
   const [savingSubId, setSavingSubId] = useState(null);
   const [approvingSubId, setApprovingSubId] = useState(null);
+  const [manualUserId, setManualUserId] = useState('');
+  const [manualItemId, setManualItemId] = useState('');
+  const [manualStartDate, setManualStartDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [addingManualSubscription, setAddingManualSubscription] = useState(false);
+  const [manualSubscriptionError, setManualSubscriptionError] = useState('');
+  const [manualSubscriptionSaved, setManualSubscriptionSaved] = useState(false);
 
   const [users, setUsers] = useState([]);
   const [usersError, setUsersError] = useState('');
@@ -216,6 +223,50 @@ export default function AdminHolidays() {
       setSubsError(err.message);
     } finally {
       setApprovingSubId(null);
+    }
+  }
+
+  async function handleAddManualSubscription(event) {
+    event.preventDefault();
+    setManualSubscriptionError('');
+    setManualSubscriptionSaved(false);
+    setAddingManualSubscription(true);
+    try {
+      const subscription = await addAdminSubscription({
+        userId: Number(manualUserId),
+        itemId: Number(manualItemId),
+        startDate: manualStartDate
+      }, adminKey);
+      setSubscriptions((previous) => [subscription, ...previous]);
+      setManualSubscriptionSaved(true);
+      setManualUserId('');
+      setManualItemId('');
+    } catch (err) {
+      setManualSubscriptionError(err.message);
+    } finally {
+      setAddingManualSubscription(false);
+    }
+  }
+
+  async function handleAddManualSubscription(event) {
+    event.preventDefault();
+    setManualSubscriptionError('');
+    setManualSubscriptionSaved(false);
+    setAddingManualSubscription(true);
+    try {
+      const subscription = await addAdminSubscription({
+        userId: Number(manualUserId),
+        itemId: Number(manualItemId),
+        startDate: manualStartDate
+      }, adminKey);
+      setSubscriptions((previous) => [subscription, ...previous]);
+      setManualSubscriptionSaved(true);
+      setManualUserId('');
+      setManualItemId('');
+    } catch (err) {
+      setManualSubscriptionError(err.message);
+    } finally {
+      setAddingManualSubscription(false);
     }
   }
 
@@ -390,6 +441,7 @@ export default function AdminHolidays() {
                 </span>
               </div>
               <p className="subscription-item-name">{sub.itemName}</p>
+              {sub.approved && <p className="subscription-summary-dates">{sub.daysRemaining} delivery days · {sub.remainingMeals} meals remaining · Ends {sub.endDate || '—'}</p>}
 
               {!sub.approved && (
                 <button
@@ -439,6 +491,66 @@ export default function AdminHolidays() {
           ))}
         </div>
       )}
+
+      <h3 style={{ marginTop: 24 }}>Add Offline Subscription</h3>
+      <form className="checkout-form" onSubmit={handleAddManualSubscription}>
+        <label>
+          Registered user
+          <select value={manualUserId} onChange={(event) => setManualUserId(event.target.value)} required>
+            <option value="">Choose a user</option>
+            {users.map((user) => <option key={user.id} value={user.id}>{user.name} · {user.phone}</option>)}
+          </select>
+        </label>
+        <label>
+          Monthly package
+          <select value={manualItemId} onChange={(event) => setManualItemId(event.target.value)} required>
+            <option value="">Choose a package</option>
+            {menuItems.filter((item) => item.name.toLowerCase().startsWith('monthly')).map((item) => (
+              <option key={item.id} value={item.id}>{item.name}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Start date
+          <input type="date" value={manualStartDate} onChange={(event) => setManualStartDate(event.target.value)} required />
+        </label>
+        <p className="status-text">This offline subscription will be marked approved for {workingDays || 'configured'} working days.</p>
+        {manualSubscriptionError && <p className="status-text error">{manualSubscriptionError}</p>}
+        {manualSubscriptionSaved && <p className="status-text">Offline subscription added and approved.</p>}
+        <button className="btn-primary" type="submit" disabled={addingManualSubscription || users.length === 0}>
+          {addingManualSubscription ? 'Adding…' : 'Add Subscription'}
+        </button>
+      </form>
+
+      <h3 style={{ marginTop: 24 }}>Add Offline Subscription</h3>
+      <form className="checkout-form" onSubmit={handleAddManualSubscription}>
+        <label>
+          Registered user
+          <select value={manualUserId} onChange={(event) => setManualUserId(event.target.value)} required>
+            <option value="">Choose a user</option>
+            {users.map((user) => <option key={user.id} value={user.id}>{user.name} · {user.phone}</option>)}
+          </select>
+        </label>
+        <label>
+          Monthly package
+          <select value={manualItemId} onChange={(event) => setManualItemId(event.target.value)} required>
+            <option value="">Choose a package</option>
+            {menuItems.filter((item) => item.name.toLowerCase().startsWith('monthly')).map((item) => (
+              <option key={item.id} value={item.id}>{item.name}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Start date
+          <input type="date" value={manualStartDate} onChange={(event) => setManualStartDate(event.target.value)} required />
+        </label>
+        <p className="status-text">This offline subscription is approved for {workingDays || 'configured'} working days.</p>
+        {manualSubscriptionError && <p className="status-text error">{manualSubscriptionError}</p>}
+        {manualSubscriptionSaved && <p className="status-text">Offline subscription added and approved.</p>}
+        <button className="btn-primary" type="submit" disabled={addingManualSubscription || users.length === 0}>
+          {addingManualSubscription ? 'Adding…' : 'Add Subscription'}
+        </button>
+      </form>
 
       <h2 style={{ marginTop: 32 }}>Order Dashboard</h2>
       {ordersError && <p className="status-text error">{ordersError}</p>}

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { updateProfile, getMySubscriptions, getMyOrders, cancelOrder, requestRefund } from '../api';
+import { updateProfile, getMySubscriptions, getMyOrders, cancelOrder, requestRefund, skipSubscriptionMeal } from '../api';
 
 export default function Profile() {
   const { user, token, ready, updateUser } = useAuth();
@@ -17,6 +17,9 @@ export default function Profile() {
   const [orders, setOrders] = useState([]);
   const [orderError, setOrderError] = useState('');
   const [updatingOrderId, setUpdatingOrderId] = useState(null);
+  const [calendarMonth, setCalendarMonth] = useState(() => new Date());
+  const [skipError, setSkipError] = useState('');
+  const [skippingMealKey, setSkippingMealKey] = useState('');
 
   useEffect(() => {
     if (user) {
@@ -51,6 +54,53 @@ export default function Profile() {
     }
   }
 
+  async function handleSkipMeal(subscription, mealEntry) {
+    const mealName = mealEntry.meal === 'lunch' ? 'lunch' : 'dinner';
+    if (!window.confirm(`Skip ${mealName} on ${mealEntry.date}? This meal will be carried forward and extend your subscription.`)) return;
+    const key = `${subscription.id}:${mealEntry.date}:${mealEntry.meal}`;
+    setSkipError('');
+    setSkippingMealKey(key);
+    try {
+      const updated = await skipSubscriptionMeal(subscription.id, { date: mealEntry.date, meal: mealEntry.meal }, token);
+      setSubscriptions((previous) => previous.map((entry) => entry.id === updated.id ? updated : entry));
+    } catch (err) {
+      setSkipError(err.message);
+    } finally {
+      setSkippingMealKey('');
+    }
+  }
+
+  const calendarYear = calendarMonth.getFullYear();
+  const calendarMonthIndex = calendarMonth.getMonth();
+  const calendarMonthKey = `${calendarYear}-${String(calendarMonthIndex + 1).padStart(2, '0')}`;
+  const calendarTitle = calendarMonth.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+  const daysInCalendarMonth = new Date(calendarYear, calendarMonthIndex + 1, 0).getDate();
+  const calendarOffset = (new Date(calendarYear, calendarMonthIndex, 1).getDay() + 6) % 7;
+  const calendarCells = [
+    ...Array(calendarOffset).fill(null),
+    ...Array.from({ length: daysInCalendarMonth }, (_, index) => index + 1)
+  ];
+  while (calendarCells.length % 7) calendarCells.push(null);
+
+  const scheduleByDate = {};
+  for (const subscription of subscriptions) {
+    for (const mealEntry of subscription.schedule || []) {
+      if (!mealEntry.date.startsWith(calendarMonthKey)) continue;
+      scheduleByDate[mealEntry.date] ||= [];
+      scheduleByDate[mealEntry.date].push({ ...mealEntry, subscriptionId: subscription.id });
+    }
+  }
+  const upcomingDates = new Set();
+  let upcomingMealCount = 0;
+  for (const subscription of subscriptions) {
+    for (const mealEntry of subscription.schedule || []) {
+      if (mealEntry.status === 'upcoming') {
+        upcomingDates.add(mealEntry.date);
+        upcomingMealCount++;
+      }
+    }
+  }
+
   if (ready && !user) {
     return <Navigate to="/login?redirect=/profile" replace />;
   }
@@ -73,7 +123,7 @@ export default function Profile() {
 
   return (
     <div className="auth-page">
-      <div className="auth-card">
+      <div className="auth-card profile-card">
         <Link to="/" className="btn-link back-link">‹ Back to Menu</Link>
         <h2>My Profile</h2>
         <form className="checkout-form" onSubmit={handleSubmit}>
@@ -133,6 +183,59 @@ export default function Profile() {
                 )}
               </div>
             ))}
+            <div className="subscription-calendar-section">
+              <div className="subscription-calendar-heading">
+                <div>
+                  <h3>Meal Calendar</h3>
+                  <p className="subscription-summary-dates">{upcomingDates.size} delivery days remaining · {upcomingMealCount} meals remaining</p>
+                </div>
+                <div className="calendar-month-controls">
+                  <button type="button" className="btn-add" aria-label="Previous month" onClick={() => setCalendarMonth((month) => new Date(month.getFullYear(), month.getMonth() - 1, 1))}>‹</button>
+                  <strong>{calendarTitle}</strong>
+                  <button type="button" className="btn-add" aria-label="Next month" onClick={() => setCalendarMonth((month) => new Date(month.getFullYear(), month.getMonth() + 1, 1))}>›</button>
+                </div>
+              </div>
+              <div className="subscription-calendar-grid">
+                {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((weekday) => <strong key={weekday} className="subscription-calendar-weekday">{weekday}</strong>)}
+                {calendarCells.map((day, index) => {
+                  if (!day) return <div key={`empty-${index}`} className="subscription-calendar-empty" />;
+                  const date = `${calendarMonthKey}-${String(day).padStart(2, '0')}`;
+                  const entries = (scheduleByDate[date] || []).sort((a, b) => a.meal.localeCompare(b.meal));
+                  return (
+                    <div key={date} className={`subscription-calendar-day ${entries.length ? 'has-meals' : ''}`}>
+                      <span className="subscription-calendar-date">{day}</span>
+                      <div className="subscription-calendar-dots" aria-label={`${entries.filter((entry) => entry.status === 'upcoming').length} upcoming meals`}>
+                        {entries.map((entry, entryIndex) => (
+                          <span key={`${entry.subscriptionId}-${entry.meal}-${entryIndex}`} className={`subscription-meal-dot ${entry.status}`} title={`${entry.meal} ${entry.status}`} />
+                        ))}
+                      </div>
+                      <div className="subscription-calendar-events">
+                        {entries.map((entry, entryIndex) => (
+                          <div key={`${entry.subscriptionId}-${entry.meal}-event-${entryIndex}`} className={`subscription-calendar-event ${entry.status}`}>
+                            <span>{entry.meal === 'lunch' ? 'Lunch' : 'Dinner'}{entry.status === 'skipped' ? ' · Carried forward' : ''}</span>
+                            {entry.status === 'upcoming' && entry.canCancel && (
+                              <button
+                                type="button"
+                                className="btn-link"
+                                disabled={skippingMealKey === `${entry.subscriptionId}:${date}:${entry.meal}`}
+                                onClick={() => {
+                                  const subscription = subscriptions.find((candidate) => candidate.id === entry.subscriptionId);
+                                  if (subscription) handleSkipMeal(subscription, entry);
+                                }}
+                              >
+                                {skippingMealKey === `${entry.subscriptionId}:${date}:${entry.meal}` ? 'Skipping…' : 'Skip'}
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {skipError && <p className="status-text error">{skipError}</p>}
+              <div className="subscription-calendar-legend"><span className="subscription-meal-dot upcoming" /> Upcoming meal <span className="subscription-meal-dot skipped" /> Carried forward</div>
+            </div>
           </div>
         )}
 

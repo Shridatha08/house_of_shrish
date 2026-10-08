@@ -91,7 +91,7 @@ function canAccessOrder(order, user, req) {
 function isValidDateString(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const date = new Date(`${value}T00:00:00Z`);
-  return date.toISOString().slice(0, 10) === value;
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
 
 function isValidTimeSlot(value) {
@@ -126,6 +126,91 @@ function isBeforeCutoff(cutoff) {
 
 function todayStr() {
   return new Date().toISOString().slice(0, 10);
+}
+
+function todayISTStr() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(new Date());
+  const part = (type) => parts.find((value) => value.type === type).value;
+  return `${part('year')}-${part('month')}-${part('day')}`;
+}
+
+function getSubscriptionMealSlots(itemName) {
+  const name = String(itemName || '').toLowerCase();
+  if (name.includes('lunch + dinner') || name.includes('lunch and dinner') || name.includes('both')) return ['lunch', 'dinner'];
+  if (name.includes('dinner')) return ['dinner'];
+  return ['lunch'];
+}
+
+function canCancelSubscriptionMeal(date, meal) {
+  const today = todayISTStr();
+  if (date > today) return true;
+  if (date < today) return false;
+  const cutoffHour = meal === 'lunch' ? 11 : 18;
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23'
+  }).formatToParts(new Date());
+  const hour = Number(parts.find((part) => part.type === 'hour').value);
+  const minute = Number(parts.find((part) => part.type === 'minute').value);
+  return hour * 60 + minute < cutoffHour * 60;
+}
+
+function buildSubscriptionSchedule(subscription, holidays) {
+  const today = todayISTStr();
+  const requiredDays = Number(subscription.workingDaysRequired);
+  const mealSlots = Array.isArray(subscription.mealSlots) && subscription.mealSlots.length
+    ? subscription.mealSlots
+    : getSubscriptionMealSlots(subscription.itemName);
+  if (!isValidDateString(subscription.startDate) || !Number.isInteger(requiredDays) || requiredDays < 1) {
+    return { mealSlots, schedule: [], endDate: null, daysRemaining: 0, remainingMeals: 0, expiresToday: false, expired: true };
+  }
+
+  const skipped = new Set((subscription.skippedMeals || []).map((entry) => `${entry.date}:${entry.meal}`));
+  const delivered = Object.fromEntries(mealSlots.map((meal) => [meal, 0]));
+  const schedule = [];
+  const cursor = new Date(`${subscription.startDate}T00:00:00Z`);
+  let endDate = null;
+  const maxDays = Math.min(10000, Math.max(730, (requiredDays + skipped.size + 10) * 3));
+
+  for (let offset = 0; offset < maxDays; offset++) {
+    const date = cursor.toISOString().slice(0, 10);
+    if (isWorkingDay(date, holidays)) {
+      for (const meal of mealSlots) {
+        if (delivered[meal] >= requiredDays) continue;
+        const isSkipped = skipped.has(`${date}:${meal}`);
+        if (isSkipped) {
+          schedule.push({ date, meal, status: 'skipped', canCancel: false });
+          continue;
+        }
+        const status = date < today ? 'completed' : 'upcoming';
+        schedule.push({ date, meal, status, canCancel: status === 'upcoming' && canCancelSubscriptionMeal(date, meal) });
+        delivered[meal]++;
+        endDate = date;
+      }
+      if (mealSlots.every((meal) => delivered[meal] >= requiredDays)) break;
+    }
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+
+  const upcomingEntries = schedule.filter((entry) => entry.status === 'upcoming');
+  const daysRemaining = new Set(upcomingEntries.map((entry) => entry.date)).size;
+  const remainingMeals = upcomingEntries.length;
+  return {
+    mealSlots,
+    schedule,
+    endDate,
+    daysRemaining,
+    remainingMeals,
+    expiresToday: endDate === today,
+    expired: Boolean(endDate) && endDate < today
+  };
 }
 
 // Counts a date as a working day when it isn't a Sunday and isn't an admin-added holiday.
@@ -466,22 +551,39 @@ app.get('/api/subscriptions/me', async (req, res) => {
   const user = await getUserFromToken(db, req);
   if (!user) return res.status(401).json({ error: 'Not signed in.' });
 
-  const today = todayStr();
   const result = db.data.subscriptions
     .filter((s) => s.userId === user.id && s.approved)
-    .map((s) => {
-      const endDate = computeSubscriptionEndDate(s.startDate, s.workingDaysRequired, db.data.holidays);
-      const daysRemaining = countWorkingDaysRemaining(today, endDate, db.data.holidays);
-      return {
-        ...s,
-        endDate,
-        daysRemaining,
-        expiresToday: endDate === today,
-        expired: Boolean(endDate) && endDate < today
-      };
-    });
+    .map((subscription) => ({ ...subscription, ...buildSubscriptionSchedule(subscription, db.data.holidays) }));
 
   res.json(result);
+});
+
+// POST /api/subscriptions/:id/skip - cancel one meal and carry it forward
+app.post('/api/subscriptions/:id/skip', async (req, res) => {
+  const db = await getDb();
+  const user = await getUserFromToken(db, req);
+  if (!user) return res.status(401).json({ error: 'Not signed in.' });
+
+  const subscription = db.data.subscriptions.find((entry) => entry.id === req.params.id && entry.userId === user.id);
+  if (!subscription || !subscription.approved) return res.status(404).json({ error: 'Active subscription not found.' });
+
+  const { date, meal } = req.body || {};
+  if (!isValidDateString(date) || !['lunch', 'dinner'].includes(meal)) {
+    return res.status(400).json({ error: 'Choose a valid date and meal to skip.' });
+  }
+  const schedule = buildSubscriptionSchedule(subscription, db.data.holidays);
+  const scheduledMeal = schedule.schedule.find((entry) => entry.date === date && entry.meal === meal);
+  if (!scheduledMeal || scheduledMeal.status !== 'upcoming') {
+    return res.status(409).json({ error: 'That meal is not an upcoming delivery in this subscription.' });
+  }
+  if (!canCancelSubscriptionMeal(date, meal)) {
+    return res.status(409).json({ error: meal === 'lunch' ? 'Lunch can only be skipped before 11:00 AM IST on the same day.' : 'Dinner can only be skipped before 6:00 PM IST on the same day.' });
+  }
+
+  subscription.skippedMeals ||= [];
+  subscription.skippedMeals.push({ date, meal, cancelledAt: new Date().toISOString() });
+  await db.write();
+  res.json({ ...subscription, ...buildSubscriptionSchedule(subscription, db.data.holidays) });
 });
 
 // GET /api/admin/subscriptions - list every user's Monthly subscriptions (requires admin key)
@@ -491,22 +593,54 @@ app.get('/api/admin/subscriptions', async (req, res) => {
   }
   const db = await getDb();
   const usersById = new Map(db.data.users.map((u) => [u.id, u]));
-  const today = todayStr();
-
-  const result = db.data.subscriptions.map((s) => {
-    const endDate = computeSubscriptionEndDate(s.startDate, s.workingDaysRequired, db.data.holidays);
-    const user = usersById.get(s.userId);
+  const result = db.data.subscriptions.map((subscription) => {
+    const schedule = buildSubscriptionSchedule(subscription, db.data.holidays);
+    const user = usersById.get(subscription.userId);
     return {
-      ...s,
-      endDate,
-      expiresToday: endDate === today,
-      expired: Boolean(endDate) && endDate < today,
+      ...subscription,
+      ...schedule,
       customerName: user?.name || 'Unknown',
       customerPhone: user?.phone || ''
     };
   });
 
   res.json(result);
+});
+
+// POST /api/admin/subscriptions - manually add an already-paid subscription
+app.post('/api/admin/subscriptions', async (req, res) => {
+  if (req.headers['x-admin-key'] !== ADMIN_KEY) return res.status(403).json({ error: 'Invalid admin key.' });
+  const { userId, itemId, startDate } = req.body || {};
+  const db = await getDb();
+  const user = db.data.users.find((candidate) => candidate.id === Number(userId));
+  if (!user) return res.status(404).json({ error: 'Registered user not found.' });
+  const menuItem = db.data.menu.find((item) => item.id === Number(itemId));
+  if (!menuItem || !menuItem.name.toLowerCase().startsWith('monthly')) {
+    return res.status(400).json({ error: 'Choose a monthly package.' });
+  }
+  if (!isValidDateString(startDate)) return res.status(400).json({ error: 'Start date must be a valid YYYY-MM-DD date.' });
+
+  const subscription = {
+    id: crypto.randomBytes(12).toString('hex'),
+    userId: user.id,
+    orderId: null,
+    itemName: menuItem.name,
+    mealSlots: getSubscriptionMealSlots(menuItem.name),
+    startDate,
+    workingDaysRequired: getSettings(db.data).subscriptionWorkingDays,
+    skippedMeals: [],
+    approved: true,
+    source: 'admin_manual',
+    createdAt: new Date().toISOString()
+  };
+  db.data.subscriptions.push(subscription);
+  await db.write();
+  res.status(201).json({
+    ...subscription,
+    ...buildSubscriptionSchedule(subscription, db.data.holidays),
+    customerName: user.name,
+    customerPhone: user.phone
+  });
 });
 
 // PATCH /api/admin/subscriptions/:id - adjust a subscription's start date or duration (requires admin key)
@@ -534,8 +668,7 @@ app.patch('/api/admin/subscriptions/:id', async (req, res) => {
   }
   await db.write();
 
-  const endDate = computeSubscriptionEndDate(subscription.startDate, subscription.workingDaysRequired, db.data.holidays);
-  res.json({ ...subscription, endDate });
+  res.json({ ...subscription, ...buildSubscriptionSchedule(subscription, db.data.holidays) });
 });
 
 // PATCH /api/admin/subscriptions/:id/approve - make a pending subscription visible to the user (requires admin key)
@@ -549,8 +682,7 @@ app.patch('/api/admin/subscriptions/:id/approve', async (req, res) => {
   subscription.approved = true;
   await db.write();
 
-  const endDate = computeSubscriptionEndDate(subscription.startDate, subscription.workingDaysRequired, db.data.holidays);
-  res.json({ ...subscription, endDate });
+  res.json({ ...subscription, ...buildSubscriptionSchedule(subscription, db.data.holidays) });
 });
 
 // GET /api/admin/users - list all registered users (requires admin key)
@@ -748,7 +880,7 @@ app.post('/api/orders', async (req, res) => {
   db.data.orders.push(order);
 
   if (user) {
-    const startDate = order.createdAt.slice(0, 10);
+    const startDate = todayISTStr();
     for (const item of orderItems) {
       if (item.name.toLowerCase().startsWith('monthly')) {
         db.data.subscriptions.push({
@@ -756,8 +888,10 @@ app.post('/api/orders', async (req, res) => {
           userId: user.id,
           orderId: order.id,
           itemName: item.name,
+          mealSlots: getSubscriptionMealSlots(item.name),
           startDate,
           workingDaysRequired: db.data.settings.subscriptionWorkingDays,
+          skippedMeals: [],
           approved: false,
           createdAt: new Date().toISOString()
         });
