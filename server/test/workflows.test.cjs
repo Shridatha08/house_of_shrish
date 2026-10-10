@@ -490,7 +490,9 @@ test('customers are told about approval, verified payment and delivery stages', 
     titles.push(orders.notifications.at(-1).title);
   }
   assert.deepEqual(titles, ['Payment confirmed', 'Order being prepared', 'Out for delivery', 'Delivered']);
-  assert.ok(orders.notifications.slice(1).every((entry) => entry.audience === 'order'));
+  const statusAlerts = orders.notifications.filter((entry) => entry.data?.type === 'order_status');
+  assert.equal(statusAlerts.length, 4);
+  assert.ok(statusAlerts.every((entry) => entry.audience === 'order'));
 });
 
 test('device tokens register per audience and can be removed', async () => {
@@ -575,4 +577,22 @@ test('delivery coordinates are optional, validated, and preserved', async () => 
   const kept = await app.request('patch', '/api/auth/profile', account, {}, headers);
   assert.equal(kept.body.user.lat, 13.1);
   assert.equal(kept.body.user.lng, 77.7);
+});
+
+test('submitting payment alerts admins to verify it', async () => {
+  const app = application();
+  await app.request('post', '/api/orders', { items: [{ id: 1, quantity: 1, customisation: 'Meal A' }], customer });
+  const orderId = app.state().orders[0].id;
+  const before = app.notifications.length;
+
+  await app.request('patch', '/api/orders/:id/mark-paid', {}, { id: String(orderId) });
+  const alert = app.notifications.at(-1);
+  assert.equal(app.notifications.length, before + 1);
+  assert.equal(alert.audience, 'admin');
+  assert.equal(alert.title, 'Payment awaiting verification');
+  assert.equal(alert.data.type, 'payment_review');
+
+  // A rejected second submission must not alert again.
+  await app.request('patch', '/api/orders/:id/mark-paid', {}, { id: String(orderId) });
+  assert.equal(app.notifications.length, before + 1);
 });

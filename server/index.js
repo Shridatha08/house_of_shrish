@@ -1272,6 +1272,14 @@ app.patch('/api/orders/:id/mark-paid', async (req, res) => {
   order.paymentStatus = 'awaiting_verification';
   order.paymentSubmittedAt = new Date().toISOString();
   await db.write();
+
+  // Nothing moves until an admin verifies this, so it has to be announced.
+  await notifyAdmins(db, {
+    title: 'Payment awaiting verification',
+    body: `#${order.orderNumber} · ₹${order.total} · ${order.customer.name} submitted payment.`,
+    data: { type: 'payment_review', orderId: order.id, orderNumber: order.orderNumber }
+  });
+
   const { accessToken, ...safeOrder } = order;
   res.json(safeOrder);
 });
