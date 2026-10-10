@@ -42,7 +42,8 @@ export default function AdminHolidays() {
   const [announcement, setAnnouncement] = useState('');
   const [orderingPaused, setOrderingPaused] = useState(false);
   const [dailyOrderCapacity, setDailyOrderCapacity] = useState('50');
-  const [orderCutoffTime, setOrderCutoffTime] = useState('10:00');
+  const [lunchCutoffTime, setLunchCutoffTime] = useState('11:00');
+  const [dinnerCutoffTime, setDinnerCutoffTime] = useState('18:30');
   const [kitchenClosedDates, setKitchenClosedDates] = useState('');
   const [deliveryTimeSlots, setDeliveryTimeSlots] = useState('11:00-13:00,18:00-20:00');
   const [menuItems, setMenuItems] = useState([]);
@@ -103,7 +104,8 @@ export default function AdminHolidays() {
           setAnnouncement(s.announcement || '');
           setOrderingPaused(Boolean(s.orderingPaused));
           setDailyOrderCapacity(String(s.dailyOrderCapacity || 50));
-          setOrderCutoffTime(s.orderCutoffTime || '10:00');
+          setLunchCutoffTime(s.lunchCutoffTime || '11:00');
+          setDinnerCutoffTime(s.dinnerCutoffTime || '18:30');
           setKitchenClosedDates((s.kitchenClosedDates || []).join(','));
           setDeliveryTimeSlots((s.deliveryTimeSlots || []).join(','));
         })
@@ -164,7 +166,8 @@ export default function AdminHolidays() {
         announcement,
         orderingPaused,
         dailyOrderCapacity: Number(dailyOrderCapacity),
-        orderCutoffTime,
+        lunchCutoffTime,
+        dinnerCutoffTime,
         kitchenClosedDates: kitchenClosedDates.split(',').map((value) => value.trim()).filter(Boolean),
         deliveryTimeSlots: deliveryTimeSlots.split(',').map((value) => value.trim()).filter(Boolean)
       }, adminKey);
@@ -293,7 +296,6 @@ export default function AdminHolidays() {
         packageName: subscription.itemName
       })));
   const preparationMeals = dailySubscriptionMeals.filter((entry) => entry.status !== 'skipped');
-  const skippedSubscriptionMeals = dailySubscriptionMeals.filter((entry) => entry.status === 'skipped');
   const lunchCount = preparationMeals.filter((entry) => entry.meal === 'lunch').length;
   const dinnerCount = preparationMeals.filter((entry) => entry.meal === 'dinner').length;
 
@@ -377,7 +379,8 @@ export default function AdminHolidays() {
         </label>
         <label><input type="checkbox" checked={orderingPaused} onChange={(e) => setOrderingPaused(e.target.checked)} /> Pause ordering</label>
         <label>Daily order capacity<input type="number" min={1} value={dailyOrderCapacity} onChange={(e) => setDailyOrderCapacity(e.target.value)} /></label>
-        <label>Same-day order cutoff (IST)<input type="time" value={orderCutoffTime} onChange={(e) => setOrderCutoffTime(e.target.value)} /></label>
+        <label>Lunch order cutoff (IST)<input type="time" value={lunchCutoffTime} onChange={(e) => setLunchCutoffTime(e.target.value)} required /></label>
+        <label>Dinner order cutoff (IST)<input type="time" value={dinnerCutoffTime} onChange={(e) => setDinnerCutoffTime(e.target.value)} required /></label>
         <label>Kitchen closed dates<input value={kitchenClosedDates} onChange={(e) => setKitchenClosedDates(e.target.value)} placeholder="YYYY-MM-DD, YYYY-MM-DD" /></label>
         <label>Delivery slots<input value={deliveryTimeSlots} onChange={(e) => setDeliveryTimeSlots(e.target.value)} placeholder="11:00-13:00,18:00-20:00" /></label>
         {settingsError && <p className="status-text error">{settingsError}</p>}
@@ -550,7 +553,6 @@ export default function AdminHolidays() {
       <dl className="subscription-preparation-totals">
         <div><dt>Lunch meals</dt><dd>{lunchCount}</dd></div>
         <div><dt>Dinner meals</dt><dd>{dinnerCount}</dd></div>
-        <div><dt>Skipped meals</dt><dd>{skippedSubscriptionMeals.length}</dd></div>
       </dl>
       {['lunch', 'dinner'].map((meal) => (
         <section key={meal} className="subscription-daily-section">
@@ -567,18 +569,6 @@ export default function AdminHolidays() {
           ))}
         </section>
       ))}
-      <section className="subscription-daily-section">
-        <h3>Skipped / Carried Forward</h3>
-        {skippedSubscriptionMeals.length === 0 ? <p className="status-text">No skipped subscription meals for this date.</p> : skippedSubscriptionMeals.map((entry) => (
-          <div key={`${entry.subscriptionId}:${entry.meal}`} className="subscription-service-row">
-            <strong>{entry.customerName}</strong>
-            <span>{entry.customerPhone}</span>
-            <span>{entry.meal === 'lunch' ? 'Lunch' : 'Dinner'} skipped</span>
-            <span>Carried forward</span>
-          </div>
-        ))}
-      </section>
-
       <h2 style={{ marginTop: 32 }}>Purchase Orders</h2>
       {ordersError && <p className="status-text error">{ordersError}</p>}
       {orders.length === 0 ? (

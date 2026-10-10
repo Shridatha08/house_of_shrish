@@ -105,23 +105,30 @@ function getSettings(data) {
     orderingPaused: false,
     kitchenClosedDates: [],
     dailyOrderCapacity: 50,
-    orderCutoffTime: '10:00',
+    lunchCutoffTime: '11:00',
+    dinnerCutoffTime: '18:30',
     deliveryTimeSlots: ['11:00-13:00', '18:00-20:00'],
     ...(data.settings || {})
   };
 }
 
-function isBeforeCutoff(cutoff) {
+function isBeforeCutoff(cutoff, now = new Date()) {
   const [hours, minutes] = cutoff.split(':').map(Number);
   const currentTime = new Intl.DateTimeFormat('en-GB', {
     timeZone: 'Asia/Kolkata',
     hour: '2-digit',
     minute: '2-digit',
     hourCycle: 'h23'
-  }).formatToParts(new Date());
+  }).formatToParts(now);
   const currentHours = Number(currentTime.find((part) => part.type === 'hour').value);
   const currentMinutes = Number(currentTime.find((part) => part.type === 'minute').value);
   return currentHours * 60 + currentMinutes < hours * 60 + minutes;
+}
+
+function getOrderMealService(settings, now = new Date()) {
+  if (isBeforeCutoff(settings.lunchCutoffTime, now)) return 'lunch';
+  if (isBeforeCutoff(settings.dinnerCutoffTime, now)) return 'dinner';
+  return null;
 }
 
 function todayStr() {
@@ -436,7 +443,8 @@ app.get('/api/store-config', async (req, res) => {
     announcement: settings.announcement,
     orderingPaused: settings.orderingPaused,
     kitchenClosedDates: settings.kitchenClosedDates,
-    orderCutoffTime: settings.orderCutoffTime,
+    lunchCutoffTime: settings.lunchCutoffTime,
+    dinnerCutoffTime: settings.dinnerCutoffTime,
     deliveryTimeSlots: settings.deliveryTimeSlots,
     dailyOrderCapacity: settings.dailyOrderCapacity
   });
@@ -532,13 +540,21 @@ app.patch('/api/admin/settings', async (req, res) => {
   }
   const db = await getDb();
   const settings = getSettings(db.data);
+  const lunchCutoffTime = input.lunchCutoffTime ?? settings.lunchCutoffTime;
+  const dinnerCutoffTime = input.dinnerCutoffTime ?? settings.dinnerCutoffTime;
+  const validTime = /^([01]\d|2[0-3]):[0-5]\d$/;
+  if (typeof lunchCutoffTime !== 'string' || typeof dinnerCutoffTime !== 'string' ||
+      !validTime.test(lunchCutoffTime) || !validTime.test(dinnerCutoffTime) || lunchCutoffTime >= dinnerCutoffTime) {
+    return res.status(400).json({ error: 'Enter valid IST cutoffs, with lunch earlier than dinner.' });
+  }
   const updates = {
     subscriptionWorkingDays: days,
     announcement: typeof input.announcement === 'string' ? input.announcement.trim().slice(0, 240) : settings.announcement,
     orderingPaused: typeof input.orderingPaused === 'boolean' ? input.orderingPaused : settings.orderingPaused,
     kitchenClosedDates: Array.isArray(input.kitchenClosedDates) && input.kitchenClosedDates.every(isValidDateString) ? input.kitchenClosedDates : settings.kitchenClosedDates,
     dailyOrderCapacity: Number.isInteger(Number(input.dailyOrderCapacity)) && Number(input.dailyOrderCapacity) > 0 ? Number(input.dailyOrderCapacity) : settings.dailyOrderCapacity,
-    orderCutoffTime: typeof input.orderCutoffTime === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(input.orderCutoffTime) ? input.orderCutoffTime : settings.orderCutoffTime,
+    lunchCutoffTime,
+    dinnerCutoffTime,
     deliveryTimeSlots: Array.isArray(input.deliveryTimeSlots) && input.deliveryTimeSlots.length > 0 ? input.deliveryTimeSlots.filter(isValidTimeSlot) : settings.deliveryTimeSlots
   };
   db.data.settings = updates;
@@ -796,18 +812,19 @@ app.post('/api/orders', async (req, res) => {
   const db = await getDb();
   const settings = getSettings(db.data);
   if (settings.orderingPaused) return res.status(409).json({ error: 'Ordering is temporarily paused.' });
-  const today = todayStr();
+  const today = todayISTStr();
   if (settings.kitchenClosedDates.includes(today)) return res.status(409).json({ error: 'The kitchen is closed today.' });
   const menuById = new Map(db.data.menu.map((item) => [item.id, item]));
   const cutoffExempt = items.every((line) => {
     const menuItem = menuById.get(Number(line.id));
     return menuItem && (menuItem.name.toLowerCase().startsWith('monthly') || menuItem.id === 6);
   });
-  if (!cutoffExempt && !isBeforeCutoff(settings.orderCutoffTime)) {
-    return res.status(409).json({ error: `Orders for today close at ${settings.orderCutoffTime} IST.` });
+  const mealService = cutoffExempt ? null : getOrderMealService(settings);
+  if (!cutoffExempt && !mealService) {
+    return res.status(409).json({ error: `Single Meal orders close at ${settings.dinnerCutoffTime} IST. Lunch cutoff is ${settings.lunchCutoffTime} IST.` });
   }
   const todaysOrders = db.data.orders.filter((order) =>
-    order.createdAt?.slice(0, 10) === today && !['cancelled', 'refunded'].includes(order.status)
+    new Date(new Date(order.createdAt).getTime() + 330 * 60 * 1000).toISOString().slice(0, 10) === today && !['cancelled', 'refunded'].includes(order.status)
   );
   const todaysQuantity = todaysOrders.reduce((sum, order) => sum + order.items.reduce((items, item) => items + item.quantity, 0), 0);
   const requestedQuantity = items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
@@ -869,8 +886,9 @@ app.post('/api/orders', async (req, res) => {
     total,
     userId: user?.id || null,
     accessToken,
-    scheduledDate: null,
-    timeSlot: null,
+    mealService,
+    scheduledDate: mealService ? today : null,
+    timeSlot: mealService,
     customer: {
       name: customer.name.trim(),
       phone: customer.phone.trim(),

@@ -36,7 +36,8 @@ const defaultData = {
     orderingPaused: false,
     kitchenClosedDates: [],
     dailyOrderCapacity: 50,
-    orderCutoffTime: '10:00',
+    lunchCutoffTime: '11:00',
+    dinnerCutoffTime: '18:30',
     deliveryTimeSlots: ['11:00-13:00', '18:00-20:00']
   },
   holidays: [
