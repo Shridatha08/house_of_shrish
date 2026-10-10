@@ -4,6 +4,7 @@ import cors from 'cors';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import { getDb } from './db.js';
+import { notifyAdmins, notifyUser, registerDeviceToken, removeDeviceToken } from './push.js';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -519,6 +520,46 @@ app.post('/api/auth/logout', async (req, res) => {
   res.status(204).end();
 });
 
+// POST /api/device-token - register this device for customer push notifications
+app.post('/api/device-token', async (req, res) => {
+  const db = await getDb();
+  const user = await getUserFromToken(db, req);
+  if (!user) return res.status(401).json({ error: 'Not signed in.' });
+
+  const { token, platform } = req.body || {};
+  if (typeof token !== 'string' || token.trim().length < 20 || token.length > 4096) {
+    return res.status(400).json({ error: 'A valid device token is required.' });
+  }
+  registerDeviceToken(db.data, { token: token.trim(), userId: user.id, platform });
+  await db.write();
+  res.status(204).end();
+});
+
+// DELETE /api/device-token - stop sending notifications to this device
+app.delete('/api/device-token', async (req, res) => {
+  const { token } = req.body || {};
+  if (typeof token !== 'string' || !token.trim()) {
+    return res.status(400).json({ error: 'A device token is required.' });
+  }
+  const db = await getDb();
+  removeDeviceToken(db.data, token.trim());
+  await db.write();
+  res.status(204).end();
+});
+
+// POST /api/admin/device-token - register an admin console device
+app.post('/api/admin/device-token', async (req, res) => {
+  if (req.headers['x-admin-key'] !== ADMIN_KEY) return res.status(403).json({ error: 'Invalid admin key.' });
+  const { token, platform } = req.body || {};
+  if (typeof token !== 'string' || token.trim().length < 20 || token.length > 4096) {
+    return res.status(400).json({ error: 'A valid device token is required.' });
+  }
+  const db = await getDb();
+  registerDeviceToken(db.data, { token: token.trim(), isAdmin: true, platform });
+  await db.write();
+  res.status(204).end();
+});
+
 // PATCH /api/auth/profile - update the current user's personal details
 app.patch('/api/auth/profile', async (req, res) => {
   const db = await getDb();
@@ -733,6 +774,17 @@ app.post('/api/subscriptions/:id/skip', async (req, res) => {
   }
   subscription.skippedMeals = skippedMeals;
   await db.write();
+
+  // Only same-day skips change what the kitchen cooks today.
+  if (date === todayISTStr()) {
+    const customer = db.data.users.find((entry) => entry.id === subscription.userId);
+    await notifyAdmins(db, {
+      title: 'Meal skipped today',
+      body: `${customer?.name || 'A customer'} skipped ${meal} for today (${subscription.itemName}).`,
+      data: { type: 'meal_skipped', subscriptionId: subscription.id, date, meal }
+    });
+  }
+
   res.json({ ...subscription, ...projectedSchedule });
 });
 
@@ -850,6 +902,12 @@ app.patch('/api/admin/subscriptions/:id/approve', async (req, res) => {
   subscription.approved = true;
   await db.write();
 
+  await notifyUser(db, subscription.userId, {
+    title: 'Subscription approved',
+    body: `Your ${subscription.itemName} is active from ${subscription.startDate}.`,
+    data: { type: 'subscription_approved', subscriptionId: subscription.id }
+  });
+
   res.json({ ...subscription, ...buildSubscriptionSchedule(subscription, subscriptionHolidays(db.data)) });
 });
 
@@ -966,6 +1024,24 @@ app.patch('/api/admin/orders/:id/status', async (req, res) => {
   order.statusUpdatedAt = new Date().toISOString();
   if (status === 'refunded') order.refundedAt = order.statusUpdatedAt;
   await db.write();
+
+  if (order.userId) {
+    const announcements = {
+      paid: ['Payment confirmed', `We have verified your payment for order #${order.orderNumber}.`],
+      preparing: ['Order being prepared', `Order #${order.orderNumber} is now being prepared.`],
+      out_for_delivery: ['Out for delivery', `Order #${order.orderNumber} is on its way.`],
+      delivered: ['Delivered', `Order #${order.orderNumber} has been delivered. Enjoy your meal!`]
+    };
+    const announcement = announcements[status];
+    if (announcement) {
+      await notifyUser(db, order.userId, {
+        title: announcement[0],
+        body: announcement[1],
+        data: { type: 'order_status', orderId: order.id, status }
+      });
+    }
+  }
+
   const { accessToken, ...safeOrder } = order;
   res.json(safeOrder);
 });
@@ -1114,6 +1190,18 @@ app.post('/api/orders', async (req, res) => {
   await db.write();
 
   const upiUri = `upi://pay?pa=${encodeURIComponent(UPI_ID)}&pn=${encodeURIComponent(MERCHANT_NAME)}&am=${total}&cu=INR&tn=${encodeURIComponent('Order ' + order.id)}`;
+
+  const newSubscriptions = orderItems.filter((item) => item.name.toLowerCase().startsWith('monthly'));
+  await notifyAdmins(db, {
+    title: newSubscriptions.length > 0 ? 'New subscription order' : 'New order',
+    body: `#${order.orderNumber} · ₹${total} · ${order.customer.name}` +
+      (newSubscriptions.length > 0 ? ` · ${newSubscriptions.map((item) => item.name).join(', ')} awaiting approval` : ''),
+    data: {
+      type: newSubscriptions.length > 0 ? 'new_subscription' : 'new_order',
+      orderId: order.id,
+      orderNumber: order.orderNumber
+    }
+  });
 
   res.status(201).json({ order: { ...order, accessToken: undefined }, upiUri, accessToken });
 });

@@ -30,6 +30,7 @@ function application(data = fixture()) {
   let state = structuredClone(data);
   let clock = new Date(now).getTime();
   const routes = new Map();
+  const notifications = [];
   const app = { use() {}, set() {}, listen() {} };
   for (const method of ['get', 'post', 'patch', 'delete']) {
     app[method] = (route, ...handlers) => routes.set(`${method}:${route}`, handlers.at(-1));
@@ -39,6 +40,18 @@ function application(data = fixture()) {
   const context = {
     express, cors: () => () => {}, crypto, Buffer, structuredClone,
     process: { env: { ADMIN_KEY: 'test-admin' } }, console,
+    // push.js is imported by index.js; the sandbox strips imports, so record instead of sending.
+    notifyAdmins: async (db, message) => { notifications.push({ audience: 'admin', ...message }); },
+    notifyUser: async (db, userId, message) => { notifications.push({ audience: 'user', userId, ...message }); },
+    registerDeviceToken: (data, record) => {
+      data.deviceTokens ||= [];
+      const existing = data.deviceTokens.find((entry) => entry.token === record.token);
+      if (existing) Object.assign(existing, record);
+      else data.deviceTokens.push({ userId: null, isAdmin: false, ...record });
+    },
+    removeDeviceToken: (data, token) => {
+      data.deviceTokens = (data.deviceTokens || []).filter((entry) => entry.token !== token);
+    },
     bcrypt: { hash: async (password) => `hashed:${password}`, compare: async (password, hash) => hash === `hashed:${password}` },
     Date: class extends Date { constructor(...args) { super(...(args.length ? args : [clock])); } static now() { return clock; } },
     getDb: async () => {
@@ -55,6 +68,7 @@ function application(data = fixture()) {
   return {
     context,
     state: () => state,
+    notifications,
     clock: (value) => { clock = new Date(value).getTime(); },
     async request(method, route, body = {}, params = {}, headers = { authorization: 'Bearer user-token' }) {
       const response = { code: 200, status(code) { this.code = code; return this; }, json(value) { this.body = value; return this; }, end() { return this; } };
@@ -423,4 +437,79 @@ test('skip with remaining carry-forward room still succeeds', async () => {
   assert.equal(response.code, 200);
   assert.equal(response.body.endDate, '2026-10-12');
   assert.equal(response.body.mealsBeyondDeadline, 0);
+});
+test('a new order alerts admins, flagging subscriptions awaiting approval', async () => {
+  const app = application();
+  await app.request('post', '/api/orders', { items: [{ id: 1, quantity: 2, customisation: 'Meal A' }], customer });
+  const [alert] = app.notifications;
+  assert.equal(alert.audience, 'admin');
+  assert.equal(alert.title, 'New order');
+  assert.equal(alert.data.type, 'new_order');
+
+  const withPlan = application();
+  await withPlan.request('post', '/api/orders', { items: [{ id: 2, quantity: 1, customisation: 'Meal A' }], customer });
+  assert.equal(withPlan.notifications[0].title, 'New subscription order');
+  assert.equal(withPlan.notifications[0].data.type, 'new_subscription');
+  assert.match(withPlan.notifications[0].body, /awaiting approval/);
+});
+
+test('only same-day skips alert admins', async () => {
+  const data = fixture();
+  data.subscriptions = [{ id: 'today', userId: 1, approved: true, itemName: 'Monthly (Lunch)', startDate: '2026-10-10', workingDaysRequired: 5 }];
+  const app = application(data);
+
+  await app.request('post', '/api/subscriptions/:id/skip', { date: '2026-10-12', meal: 'lunch' }, { id: 'today' });
+  assert.equal(app.notifications.length, 0, 'a future skip must not wake the kitchen');
+
+  await app.request('post', '/api/subscriptions/:id/skip', { date: '2026-10-10', meal: 'lunch' }, { id: 'today' });
+  assert.equal(app.notifications.length, 1);
+  assert.equal(app.notifications[0].audience, 'admin');
+  assert.equal(app.notifications[0].data.type, 'meal_skipped');
+});
+
+test('customers are told about approval, verified payment and delivery stages', async () => {
+  const data = fixture();
+  data.subscriptions = [{ id: 'pending', userId: 1, approved: false, itemName: 'Monthly (Lunch)', startDate: '2026-10-10', workingDaysRequired: 2 }];
+  const app = application(data);
+
+  await app.request('patch', '/api/admin/subscriptions/:id/approve', {}, { id: 'pending' }, { 'x-admin-key': 'test-admin' });
+  assert.equal(app.notifications[0].audience, 'user');
+  assert.equal(app.notifications[0].userId, 1);
+  assert.equal(app.notifications[0].data.type, 'subscription_approved');
+
+  const orders = application();
+  await orders.request('post', '/api/orders', { items: [{ id: 1, quantity: 1, customisation: 'Meal A' }], customer });
+  const orderId = orders.state().orders[0].id;
+  await orders.request('patch', '/api/orders/:id/mark-paid', {}, { id: String(orderId) });
+
+  const titles = [];
+  for (const status of ['paid', 'preparing', 'out_for_delivery', 'delivered']) {
+    await orders.request('patch', '/api/admin/orders/:id/status', { status }, { id: String(orderId) }, { 'x-admin-key': 'test-admin' });
+    titles.push(orders.notifications.at(-1).title);
+  }
+  assert.deepEqual(titles, ['Payment confirmed', 'Order being prepared', 'Out for delivery', 'Delivered']);
+  assert.ok(orders.notifications.slice(1).every((entry) => entry.audience === 'user'));
+});
+
+test('device tokens register per audience and can be removed', async () => {
+  const app = application();
+  const token = 'a'.repeat(40);
+
+  assert.equal((await app.request('post', '/api/device-token', { token: 'short' })).code, 400);
+  assert.equal((await app.request('post', '/api/device-token', { token }, {}, {})).code, 401);
+
+  await app.request('post', '/api/device-token', { token });
+  assert.deepEqual(app.state().deviceTokens.map((entry) => [entry.userId, entry.isAdmin]), [[1, false]]);
+
+  // Re-registering the same device must not duplicate it.
+  await app.request('post', '/api/device-token', { token });
+  assert.equal(app.state().deviceTokens.length, 1);
+
+  const adminToken = 'b'.repeat(40);
+  assert.equal((await app.request('post', '/api/admin/device-token', { token: adminToken }, {}, {})).code, 403);
+  await app.request('post', '/api/admin/device-token', { token: adminToken }, {}, { 'x-admin-key': 'test-admin' });
+  assert.equal(app.state().deviceTokens.filter((entry) => entry.isAdmin).length, 1);
+
+  await app.request('delete', '/api/device-token', { token });
+  assert.deepEqual(app.state().deviceTokens.map((entry) => entry.token), [adminToken]);
 });
