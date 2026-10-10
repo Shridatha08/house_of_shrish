@@ -121,11 +121,10 @@ export async function notifyOrder(db, order, message) {
   await send(db, tokens, { ...message, data: { ...message.data, channel: 'orders' } });
 }
 
-/// Broadcast to every customer device. Uses its own channel so muting
-/// promotions cannot also silence order updates.
+/// Broadcast to every customer device.
 export async function notifyAllCustomers(db, message) {
   const tokens = tokensFor(db.data, (entry) => !entry.isAdmin);
-  await send(db, tokens, { ...message, data: { ...message.data, channel: 'promotions' } });
+  await send(db, tokens, { ...message, data: { ...message.data, channel: 'orders' } });
   return tokens.length;
 }
 
