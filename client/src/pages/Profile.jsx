@@ -79,7 +79,7 @@ export default function Profile() {
 
   async function handleSkipMeal(subscription, mealEntry) {
     const mealName = mealEntry.meal === 'lunch' ? 'lunch' : 'dinner';
-    if (!window.confirm(`Skip ${mealName} on ${mealEntry.date}? This meal will be carried forward and extend your subscription.`)) return;
+    if (!window.confirm(`Skip ${mealName} on ${mealEntry.date}? Carry-forward is allowed only until ${subscription.carryForwardDeadline || subscription.endDate}.`)) return;
     const key = `${subscription.id}:${mealEntry.date}:${mealEntry.meal}`;
     setSkipError('');
     setSkippingMealKey(key);
@@ -88,6 +88,9 @@ export default function Profile() {
       setSubscriptions((previous) => previous.map((entry) => entry.id === updated.id ? updated : entry));
     } catch (err) {
       setSkipError(err.message);
+      if (err.message === 'Cannot be carry forwarded beyond this date') {
+        window.alert('Cannot be carry forwarded beyond this date');
+      }
     } finally {
       setSkippingMealKey('');
     }
@@ -209,6 +212,8 @@ export default function Profile() {
                 <p className="subscription-summary-dates">
                   {sub.startDate} → {sub.endDate}
                 </p>
+                {sub.carryForwardDeadline && <p className="subscription-summary-dates">Carry-forward deadline: {sub.carryForwardDeadline}</p>}
+                {sub.mealsBeyondDeadline > 0 && <p className="status-text error">{sub.mealsBeyondDeadline} meal(s) cannot be scheduled before the carry-forward deadline.</p>}
                 {!sub.expired && (
                   <p className="subscription-days-remaining">
                     {sub.daysRemaining === 0 ? 'Ends today' : `${sub.daysRemaining} day${sub.daysRemaining === 1 ? '' : 's'} remaining`}

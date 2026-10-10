@@ -27,20 +27,33 @@ export default function Checkout() {
   const [subscriptionStartDate, setSubscriptionStartDate] = useState(todayIST);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [alternateDelivery, setAlternateDelivery] = useState(false);
 
   const requiresAccount = items.some((i) => i.name.toLowerCase().startsWith('monthly'));
   const blockedByAuth = requiresAccount && !user;
 
   // Prefill delivery details from the saved profile for logged-in users.
   useEffect(() => {
-    if (user) {
+    if (user && !alternateDelivery) {
       setName(user.name);
       setPhone(user.phone);
       setAddress(user.address || '');
       setFlatNumber(user.flatNumber || '');
       setPincode(user.pincode || '');
     }
-  }, [user]);
+  }, [user, alternateDelivery]);
+
+  function changeDeliveryMode(event) {
+    const alternate = event.target.checked;
+    setAlternateDelivery(alternate);
+    setError('');
+    setPosition(null);
+    setName(alternate ? '' : user?.name || '');
+    setPhone(alternate ? '' : user?.phone || '');
+    setAddress(alternate ? '' : user?.address || '');
+    setFlatNumber(alternate ? '' : user?.flatNumber || '');
+    setPincode(alternate ? '' : user?.pincode || '');
+  }
 
   function useMyLocation() {
     if (!navigator.geolocation) return;
@@ -139,8 +152,14 @@ export default function Checkout() {
         </p>
       )}
       <form className="checkout-form" onSubmit={handleSubmit}>
+        {user && (
+          <label className="alternate-delivery-toggle">
+            <input type="checkbox" checked={alternateDelivery} onChange={changeDeliveryMode} />
+            Ordering for someone else / Change address
+          </label>
+        )}
         <label>
-          Full name
+          {alternateDelivery ? 'Recipient name' : 'Full name'}
           <input value={name} onChange={(e) => setName(e.target.value)} required />
         </label>
         <label>

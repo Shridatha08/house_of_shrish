@@ -290,3 +290,123 @@ test('actual persistence adapter rejects competing snapshots instead of losing d
   await assert.rejects(second.write(), (error) => error.status === 409);
   assert.equal(state.orders.length, 1);
 });
+
+test('existing monthly coverage permits only the missing meal', async () => {
+  for (const [existingPlan, allowed, blocked] of [
+    ['Monthly (Lunch)', [3], [2, 4]],
+    ['Monthly (Dinner)', [2], [3, 4]],
+    ['Monthly (Lunch + Dinner)', [], [2, 3, 4]]
+  ]) {
+    for (const itemId of [...allowed, ...blocked]) {
+      const data = fixture();
+      data.menu.push({ id: 3, name: 'Monthly (Dinner)', category: 'Pure Veg Meals', price: 3299, customisations: ['Meal A'] });
+      data.subscriptions.push({ id: 'existing', userId: 1, approved: true, itemName: existingPlan, startDate: '2026-10-10', workingDaysRequired: 26 });
+      const result = await purchase(application(data), itemId);
+      assert.equal(result.code, allowed.includes(itemId) ? 201 : 409, `${existingPlan}: requested ${itemId}`);
+    }
+  }
+});
+
+test('pending monthly purchase blocks repeat coverage but cancellation or expiry releases it', async () => {
+  const app = application();
+  const created = await purchase(app, 2);
+  assert.equal((await purchase(app, 2)).code, 409);
+  await app.request('patch', '/api/orders/:id/cancel', {}, { id: created.body.order.id });
+  assert.equal((await purchase(app, 2)).code, 201);
+  app.clock('2026-10-10T04:31:00Z');
+  assert.equal((await purchase(app, 2)).code, 201);
+});
+
+test('duplicate meal coverage inside one cart and manual enrollment are rejected', async () => {
+  const app = application();
+  const duplicate = await purchase(app, 2, { items: [
+    { id: 2, quantity: 1, customisation: 'Meal A' },
+    { id: 4, quantity: 1, customisation: 'Meal A' }
+  ] });
+  assert.equal(duplicate.code, 409);
+  const manual = { userId: 1, itemId: 2, startDate: '2026-10-10' };
+  assert.equal((await app.request('post', '/api/admin/subscriptions', manual, {}, adminHeaders)).code, 201);
+  assert.equal((await app.request('post', '/api/admin/subscriptions', manual, {}, adminHeaders)).code, 409);
+});
+
+test('expired subscriptions do not block a new monthly purchase', async () => {
+  const data = fixture();
+  data.subscriptions.push({ id: 'old', userId: 1, approved: true, itemName: 'Monthly (Lunch + Dinner)', startDate: '2026-09-01', workingDaysRequired: 1 });
+  assert.equal((await purchase(application(data), 4)).code, 201);
+});
+
+test('carry-forward deadline adds a calendar month to original end plus unique admin holidays', () => {
+  const app = application();
+  const deadline = app.context.subscriptionCarryForwardDeadline;
+  assert.equal(deadline('2026-10-10', '2026-11-12', []), '2026-12-12');
+  assert.equal(deadline('2026-10-10', '2026-11-12', [
+    { date: '2026-11-10' }, { date: '2026-11-10' },
+    { date: '2026-10-09' }, { date: '2026-12-20' }
+  ]), '2026-12-13');
+  assert.equal(deadline('2026-01-01', '2026-01-31', []), '2026-02-28');
+  assert.equal(deadline('2028-01-01', '2028-01-31', []), '2028-02-29');
+  assert.equal(deadline('2026-10-10', '2026-11-12', [
+    { date: '2026-11-10' }, { date: '2026-12-13' }
+  ]), '2026-12-14');
+});
+
+test('repeated skips cannot extend original end or schedule past the carry-forward deadline', () => {
+  const app = application();
+  const subscription = {
+    startDate: '2026-10-10', workingDaysRequired: 2,
+    itemName: 'Monthly (Lunch + Dinner)', skippedMeals: []
+  };
+  const base = app.context.buildSubscriptionSchedule(subscription, []);
+  assert.equal(base.originalEndDate, '2026-10-12');
+  assert.equal(base.carryForwardDeadline, '2026-11-12');
+  const cursor = new Date('2026-10-10T00:00:00Z');
+  while (cursor.toISOString().slice(0, 10) <= base.carryForwardDeadline) {
+    const date = cursor.toISOString().slice(0, 10);
+    for (const meal of ['lunch', 'dinner']) subscription.skippedMeals.push({ date, meal });
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  const capped = app.context.buildSubscriptionSchedule(subscription, []);
+  assert.equal(capped.originalEndDate, base.originalEndDate);
+  assert.equal(capped.carryForwardDeadline, base.carryForwardDeadline);
+  assert.equal(capped.endDate, base.carryForwardDeadline);
+  assert.equal(capped.mealsBeyondDeadline, 4);
+  assert.equal(capped.remainingMeals, 0);
+  assert.ok(capped.schedule.every((entry) => entry.date <= base.carryForwardDeadline));
+  app.clock('2026-11-13T04:00:00Z');
+  assert.equal(app.context.buildSubscriptionSchedule(subscription, []).expired, true);
+});
+
+test('skip beyond carry-forward deadline alerts with exact message and preserves the scheduled meal', async () => {
+  const data = fixture();
+  const skippedMeals = [];
+  const cursor = new Date('2026-10-10T00:00:00Z');
+  while (cursor.toISOString().slice(0, 10) < '2026-11-10') {
+    if (cursor.getUTCDay() !== 0) skippedMeals.push({ date: cursor.toISOString().slice(0, 10), meal: 'lunch' });
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  data.subscriptions = [{
+    id: 'deadline', userId: 1, approved: true, itemName: 'Monthly (Lunch)',
+    startDate: '2026-10-10', workingDaysRequired: 1, skippedMeals
+  }];
+  const app = application(data);
+  const originalCount = skippedMeals.length;
+  const response = await app.request('post', '/api/subscriptions/:id/skip', { date: '2026-11-10', meal: 'lunch' }, { id: 'deadline' });
+  assert.equal(response.code, 409);
+  assert.equal(response.body.error, 'Cannot be carry forwarded beyond this date');
+  assert.equal(app.state().subscriptions[0].skippedMeals.length, originalCount);
+  assert.equal(app.state().revision, 0);
+  const schedule = app.context.buildSubscriptionSchedule(app.state().subscriptions[0], []);
+  assert.equal(schedule.schedule.at(-1).status, 'upcoming');
+  const outside = await app.request('post', '/api/subscriptions/:id/skip', { date: '2026-11-11', meal: 'lunch' }, { id: 'deadline' });
+  assert.equal(outside.body.error, 'Cannot be carry forwarded beyond this date');
+});
+
+test('skip with remaining carry-forward room still succeeds', async () => {
+  const data = fixture();
+  data.subscriptions = [{ id: 'available', userId: 1, approved: true, itemName: 'Monthly (Lunch)', startDate: '2026-10-10', workingDaysRequired: 1 }];
+  const app = application(data);
+  const response = await app.request('post', '/api/subscriptions/:id/skip', { date: '2026-10-10', meal: 'lunch' }, { id: 'available' });
+  assert.equal(response.code, 200);
+  assert.equal(response.body.endDate, '2026-10-12');
+  assert.equal(response.body.mealsBeyondDeadline, 0);
+});

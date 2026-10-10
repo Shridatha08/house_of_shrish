@@ -845,6 +845,18 @@
   margin-top: 10px;
 }
 
+.checkout-form .alternate-delivery-toggle {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.checkout-form .alternate-delivery-toggle input {
+  width: auto;
+  flex: 0 0 auto;
+}
+
 .subscription-summary-header {
   display: flex;
   align-items: center;

@@ -472,6 +472,8 @@ export default function AdminHolidays() {
                 </span>
               </div>
               <p className="subscription-item-name">{sub.itemName}</p>
+              {sub.carryForwardDeadline && <p className="subscription-summary-dates">Original end: {sub.originalEndDate} · Carry-forward deadline: {sub.carryForwardDeadline}</p>}
+              {sub.mealsBeyondDeadline > 0 && <p className="status-text error">{sub.mealsBeyondDeadline} meal(s) exceed the carry-forward deadline.</p>}
               {sub.deactivated && <p className="status-text">Subscription deactivated after cancellation or refund.</p>}
               {sub.approved && <p className="subscription-summary-dates">{sub.daysRemaining} delivery days · {sub.remainingMeals} meals remaining · Ends {sub.endDate || '—'}</p>}
 

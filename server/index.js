@@ -106,6 +106,32 @@ function subscriptionInService(subscription, data) {
   return Boolean(order && paymentStatus(order) === 'verified' && !['cancelled', 'refund_requested', 'refunded'].includes(order.status));
 }
 
+function subscriptionCoverage(data, userId) {
+  const covered = new Set();
+  for (const subscription of data.subscriptions) {
+    if (subscription.userId !== userId || subscription.deactivated) continue;
+    if (subscription.orderId) {
+      const order = data.orders.find((entry) => entry.id === subscription.orderId);
+      if (!order || !reservesStock(order)) continue;
+    } else if (!subscription.approved) continue;
+    const schedule = buildSubscriptionSchedule(subscription, subscriptionHolidays(data));
+    if (!schedule.endDate || schedule.endDate < todayISTStr()) continue;
+    for (const meal of schedule.mealSlots) covered.add(meal);
+  }
+  return covered;
+}
+
+function monthlyCoverageConflict(data, userId, monthlyItems) {
+  const covered = subscriptionCoverage(data, userId);
+  for (const item of monthlyItems) {
+    const meals = getSubscriptionMealSlots(item.name);
+    const conflict = meals.find((meal) => covered.has(meal));
+    if (conflict) return `You already have an active or pending ${conflict} subscription. Choose only a meal you do not have.`;
+    for (const meal of meals) covered.add(meal);
+  }
+  return null;
+}
+
 function stockUsed(data, date, itemId) {
   return data.orders.filter((order) => reservesStock(order) && businessDate(order.createdAt) === date)
     .reduce((total, order) => total + order.items.filter((item) => item.id === itemId).reduce((quantity, item) => quantity + item.quantity, 0), 0);
@@ -226,6 +252,23 @@ function canCancelSubscriptionMeal(date, meal) {
   return hour * 60 + minute < cutoffHour * 60;
 }
 
+function subscriptionCarryForwardDeadline(startDate, originalEndDate, holidays) {
+  const original = new Date(`${originalEndDate}T00:00:00Z`);
+  const monthStart = new Date(Date.UTC(original.getUTCFullYear(), original.getUTCMonth() + 1, 1));
+  const lastDay = new Date(Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() + 1, 0)).getUTCDate();
+  monthStart.setUTCDate(Math.min(original.getUTCDate(), lastDay));
+  const baseDeadline = monthStart.toISOString().slice(0, 10);
+  const holidayDates = [...new Set(holidays.map((holiday) => holiday.date))]
+    .filter((date) => isValidDateString(date) && date >= startDate)
+    .sort();
+  const deadline = new Date(`${baseDeadline}T00:00:00Z`);
+  for (const date of holidayDates) {
+    if (date > deadline.toISOString().slice(0, 10)) break;
+    deadline.setUTCDate(deadline.getUTCDate() + 1);
+  }
+  return deadline.toISOString().slice(0, 10);
+}
+
 function buildSubscriptionSchedule(subscription, holidays) {
   const today = todayISTStr();
   const requiredDays = Number(subscription.workingDaysRequired);
@@ -235,6 +278,12 @@ function buildSubscriptionSchedule(subscription, holidays) {
   if (subscription.deactivated || !isValidDateString(subscription.startDate) || !Number.isInteger(requiredDays) || requiredDays < 1) {
     return { mealSlots, schedule: [], endDate: null, daysRemaining: 0, remainingMeals: 0, expiresToday: false, expired: true };
   }
+
+  const originalEndDate = computeSubscriptionEndDate(subscription.startDate, requiredDays, holidays);
+  if (!originalEndDate) {
+    return { mealSlots, schedule: [], endDate: null, daysRemaining: 0, remainingMeals: 0, expiresToday: false, expired: true };
+  }
+  const carryForwardDeadline = subscriptionCarryForwardDeadline(subscription.startDate, originalEndDate, holidays);
 
   const skipped = new Set((subscription.skippedMeals || []).map((entry) => `${entry.date}:${entry.meal}`));
   const requiredMeals = requiredDays * mealSlots.length;
@@ -246,6 +295,7 @@ function buildSubscriptionSchedule(subscription, holidays) {
 
   for (let offset = 0; offset < maxDays; offset++) {
     const date = cursor.toISOString().slice(0, 10);
+    if (date > carryForwardDeadline) break;
     if (isWorkingDay(date, holidays)) {
       for (const meal of mealSlots) {
         if (deliveredMeals >= requiredMeals) break;
@@ -267,10 +317,15 @@ function buildSubscriptionSchedule(subscription, holidays) {
   const upcomingEntries = schedule.filter((entry) => entry.status === 'upcoming');
   const daysRemaining = new Set(upcomingEntries.map((entry) => entry.date)).size;
   const remainingMeals = upcomingEntries.length;
+  const mealsBeyondDeadline = Math.max(0, requiredMeals - deliveredMeals);
+  if (mealsBeyondDeadline > 0) endDate = carryForwardDeadline;
   return {
     mealSlots,
     schedule,
     endDate,
+    originalEndDate,
+    carryForwardDeadline,
+    mealsBeyondDeadline,
     daysRemaining,
     remainingMeals,
     expiresToday: endDate === today,
@@ -657,6 +712,9 @@ app.post('/api/subscriptions/:id/skip', async (req, res) => {
     return res.status(400).json({ error: 'Choose a valid date and meal to skip.' });
   }
   const schedule = buildSubscriptionSchedule(subscription, subscriptionHolidays(db.data));
+  if (date > schedule.carryForwardDeadline) {
+    return res.status(409).json({ error: 'Cannot be carry forwarded beyond this date' });
+  }
   const scheduledMeal = schedule.schedule.find((entry) => entry.date === date && entry.meal === meal);
   if (!scheduledMeal || scheduledMeal.status !== 'upcoming') {
     return res.status(409).json({ error: 'That meal is not an upcoming delivery in this subscription.' });
@@ -665,10 +723,14 @@ app.post('/api/subscriptions/:id/skip', async (req, res) => {
     return res.status(409).json({ error: meal === 'lunch' ? 'Lunch can only be skipped before 11:00 AM IST on the same day.' : 'Dinner can only be skipped before 6:00 PM IST on the same day.' });
   }
 
-  subscription.skippedMeals ||= [];
-  subscription.skippedMeals.push({ date, meal, cancelledAt: new Date().toISOString() });
+  const skippedMeals = [...(subscription.skippedMeals || []), { date, meal, cancelledAt: new Date().toISOString() }];
+  const projectedSchedule = buildSubscriptionSchedule({ ...subscription, skippedMeals }, subscriptionHolidays(db.data));
+  if (projectedSchedule.mealsBeyondDeadline > 0) {
+    return res.status(409).json({ error: 'Cannot be carry forwarded beyond this date' });
+  }
+  subscription.skippedMeals = skippedMeals;
   await db.write();
-  res.json({ ...subscription, ...buildSubscriptionSchedule(subscription, subscriptionHolidays(db.data)) });
+  res.json({ ...subscription, ...projectedSchedule });
 });
 
 // GET /api/admin/subscriptions - list every user's Monthly subscriptions (requires admin key)
@@ -706,6 +768,8 @@ app.post('/api/admin/subscriptions', async (req, res) => {
     return res.status(400).json({ error: 'Choose a monthly package.' });
   }
   if (!isValidDateString(startDate)) return res.status(400).json({ error: 'Start date must be a valid YYYY-MM-DD date.' });
+  const coverageConflict = monthlyCoverageConflict(db.data, user.id, [menuItem]);
+  if (coverageConflict) return res.status(409).json({ error: coverageConflict });
 
   const subscription = {
     id: crypto.randomBytes(12).toString('hex'),
@@ -949,6 +1013,12 @@ app.post('/api/orders', async (req, res) => {
   });
   if (requiresAccount && !user) {
     return res.status(401).json({ error: 'Please sign up or log in to order Monthly packages.' });
+  }
+  if (requiresAccount) {
+    const monthlyItems = items.map((line) => menuById.get(Number(line.id)))
+      .filter((item) => item && item.name.toLowerCase().startsWith('monthly'));
+    const coverageConflict = monthlyCoverageConflict(db.data, user.id, monthlyItems);
+    if (coverageConflict) return res.status(409).json({ error: coverageConflict });
   }
   const preferredStartDate = subscriptionStartDate ?? todayISTStr();
   if (requiresAccount && (!isValidDateString(preferredStartDate) || preferredStartDate < todayISTStr())) {
