@@ -4,7 +4,7 @@ import cors from 'cors';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import { getDb } from './db.js';
-import { notifyAdmins, notifyOrder, notifyUser, pushDiagnostics, registerDeviceToken, removeDeviceToken } from './push.js';
+import { notifyAdmins, notifyAllCustomers, notifyOrder, notifyUser, pushDiagnostics, registerDeviceToken, removeDeviceToken } from './push.js';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -606,6 +606,27 @@ app.get('/api/admin/push-status', async (req, res) => {
   if (req.headers['x-admin-key'] !== ADMIN_KEY) return res.status(403).json({ error: 'Invalid admin key.' });
   const db = await getDb();
   res.json(pushDiagnostics(db.data));
+});
+
+// POST /api/admin/broadcast - send a promotional notification to every customer
+app.post('/api/admin/broadcast', async (req, res) => {
+  if (req.headers['x-admin-key'] !== ADMIN_KEY) return res.status(403).json({ error: 'Invalid admin key.' });
+  const title = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
+  const body = typeof req.body?.body === 'string' ? req.body.body.trim() : '';
+  if (!title || title.length > 60) {
+    return res.status(400).json({ error: 'Enter a title of up to 60 characters.' });
+  }
+  if (!body || body.length > 180) {
+    return res.status(400).json({ error: 'Enter a message of up to 180 characters.' });
+  }
+
+  const db = await getDb();
+  const recipients = await notifyAllCustomers(db, {
+    title,
+    body,
+    data: { type: 'promotion' }
+  });
+  res.json({ recipients });
 });
 
 // PATCH /api/auth/profile - update the current user's personal details

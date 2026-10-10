@@ -50,6 +50,11 @@ function application(data = fixture()) {
       if (existing) Object.assign(existing, record);
       else data.deviceTokens.push({ userId: null, orderId: null, isAdmin: false, ...record });
     },
+    notifyAllCustomers: async (db, message) => {
+      const tokens = (db.data.deviceTokens || []).filter((entry) => !entry.isAdmin);
+      notifications.push({ audience: 'promotion', recipients: tokens.length, ...message });
+      return tokens.length;
+    },
     pushDiagnostics: (data) => ({ enabled: false, reason: 'test', devices: { total: (data.deviceTokens || []).length } }),
     removeDeviceToken: (data, token) => {
       data.deviceTokens = (data.deviceTokens || []).filter((entry) => entry.token !== token);
@@ -595,4 +600,26 @@ test('submitting payment alerts admins to verify it', async () => {
   // A rejected second submission must not alert again.
   await app.request('patch', '/api/orders/:id/mark-paid', {}, { id: String(orderId) });
   assert.equal(app.notifications.length, before + 1);
+});
+
+test('promotional broadcasts validate content and reach only customers', async () => {
+  const app = application();
+  const admin = { 'x-admin-key': 'test-admin' };
+
+  assert.equal((await app.request('post', '/api/admin/broadcast', { title: 'Hi', body: 'There' }, {}, {})).code, 403);
+  assert.equal((await app.request('post', '/api/admin/broadcast', { title: '', body: 'There' }, {}, admin)).code, 400);
+  assert.equal((await app.request('post', '/api/admin/broadcast', { title: 'x'.repeat(61), body: 'There' }, {}, admin)).code, 400);
+  assert.equal((await app.request('post', '/api/admin/broadcast', { title: 'Hi', body: 'y'.repeat(181) }, {}, admin)).code, 400);
+
+  await app.request('post', '/api/device-token', { token: 'c'.repeat(40) });
+  await app.request('post', '/api/admin/device-token', { token: 'a'.repeat(40) }, {}, admin);
+
+  const sent = await app.request('post', '/api/admin/broadcast', { title: ' Weekend offer ', body: ' 20% off ladoos ' }, {}, admin);
+  assert.equal(sent.code, 200);
+  assert.equal(sent.body.recipients, 1, 'admin devices must not receive promotions');
+
+  const promo = app.notifications.at(-1);
+  assert.equal(promo.title, 'Weekend offer');
+  assert.equal(promo.body, '20% off ladoos');
+  assert.equal(promo.data.type, 'promotion');
 });

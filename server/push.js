@@ -121,6 +121,14 @@ export async function notifyOrder(db, order, message) {
   await send(db, tokens, { ...message, data: { ...message.data, channel: 'orders' } });
 }
 
+/// Broadcast to every customer device. Uses its own channel so muting
+/// promotions cannot also silence order updates.
+export async function notifyAllCustomers(db, message) {
+  const tokens = tokensFor(db.data, (entry) => !entry.isAdmin);
+  await send(db, tokens, { ...message, data: { ...message.data, channel: 'promotions' } });
+  return tokens.length;
+}
+
 export function registerDeviceToken(data, { token, userId = null, orderId = null, isAdmin = false, platform = 'android' }) {
   data.deviceTokens ||= [];
   // A device can switch accounts, so the token (not the user) is the identity.
