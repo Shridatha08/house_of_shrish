@@ -7,10 +7,10 @@ const MEAL_CUSTOMISATIONS = [
 
 const defaultData = {
   menu: [
-    { id: 1, name: 'Single Meal', description: 'Pure Veg Meals', price: 119, category: 'Pure Veg Meals', image: '', customisations: MEAL_CUSTOMISATIONS },
-    { id: 2, name: 'Monthly (Lunch)', description: 'Pure Veg Meals', price: 2999, category: 'Pure Veg Meals', image: '', customisations: MEAL_CUSTOMISATIONS },
-    { id: 3, name: 'Monthly (Dinner)', description: 'Pure Veg Meals', price: 2999, category: 'Pure Veg Meals', image: '', customisations: MEAL_CUSTOMISATIONS },
-    { id: 4, name: 'Monthly (Lunch + Dinner)', description: 'Pure Veg Meals', price: 5999, category: 'Pure Veg Meals', image: '', customisations: MEAL_CUSTOMISATIONS },
+    { id: 1, name: 'Single Meal', description: 'Pure Veg Meals', price: 129, category: 'Pure Veg Meals', image: '', customisations: MEAL_CUSTOMISATIONS },
+    { id: 2, name: 'Monthly (Lunch)', description: 'Pure Veg Meals', price: 3299, category: 'Pure Veg Meals', image: '', customisations: MEAL_CUSTOMISATIONS },
+    { id: 3, name: 'Monthly (Dinner)', description: 'Pure Veg Meals', price: 3299, category: 'Pure Veg Meals', image: '', customisations: MEAL_CUSTOMISATIONS },
+    { id: 4, name: 'Monthly (Lunch + Dinner)', description: 'Pure Veg Meals', price: 5499, category: 'Pure Veg Meals', image: '', customisations: MEAL_CUSTOMISATIONS },
     {
       id: 6,
       name: 'Dry Fruits Ladoo',
@@ -91,7 +91,7 @@ export async function getDb() {
       existingItem.customisations = structuredClone(menuItem.customisations);
       menuMigrated = true;
     }
-    if (menuItem.id === 4 && existingItem.price !== menuItem.price) {
+    if ([1, 2, 3, 4].includes(menuItem.id) && existingItem.price !== menuItem.price) {
       existingItem.price = menuItem.price;
       menuMigrated = true;
     }

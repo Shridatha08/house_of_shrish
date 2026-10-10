@@ -166,14 +166,15 @@ function buildSubscriptionSchedule(subscription, holidays) {
   const today = todayISTStr();
   const requiredDays = Number(subscription.workingDaysRequired);
   const mealSlots = Array.isArray(subscription.mealSlots) && subscription.mealSlots.length
-    ? subscription.mealSlots
+    ? ['lunch', 'dinner'].filter((meal) => subscription.mealSlots.includes(meal))
     : getSubscriptionMealSlots(subscription.itemName);
   if (!isValidDateString(subscription.startDate) || !Number.isInteger(requiredDays) || requiredDays < 1) {
     return { mealSlots, schedule: [], endDate: null, daysRemaining: 0, remainingMeals: 0, expiresToday: false, expired: true };
   }
 
   const skipped = new Set((subscription.skippedMeals || []).map((entry) => `${entry.date}:${entry.meal}`));
-  const delivered = Object.fromEntries(mealSlots.map((meal) => [meal, 0]));
+  const requiredMeals = requiredDays * mealSlots.length;
+  let deliveredMeals = 0;
   const schedule = [];
   const cursor = new Date(`${subscription.startDate}T00:00:00Z`);
   let endDate = null;
@@ -183,7 +184,7 @@ function buildSubscriptionSchedule(subscription, holidays) {
     const date = cursor.toISOString().slice(0, 10);
     if (isWorkingDay(date, holidays)) {
       for (const meal of mealSlots) {
-        if (delivered[meal] >= requiredDays) continue;
+        if (deliveredMeals >= requiredMeals) break;
         const isSkipped = skipped.has(`${date}:${meal}`);
         if (isSkipped) {
           schedule.push({ date, meal, status: 'skipped', canCancel: false });
@@ -191,10 +192,10 @@ function buildSubscriptionSchedule(subscription, holidays) {
         }
         const status = date < today ? 'completed' : 'upcoming';
         schedule.push({ date, meal, status, canCancel: status === 'upcoming' && canCancelSubscriptionMeal(date, meal) });
-        delivered[meal]++;
+        deliveredMeals++;
         endDate = date;
       }
-      if (mealSlots.every((meal) => delivered[meal] >= requiredDays)) break;
+      if (deliveredMeals >= requiredMeals) break;
     }
     cursor.setUTCDate(cursor.getUTCDate() + 1);
   }
@@ -778,7 +779,7 @@ app.patch('/api/admin/orders/:id/status', async (req, res) => {
 
 // POST /api/orders - place a new order
 app.post('/api/orders', async (req, res) => {
-  const { items, customer } = req.body || {};
+  const { items, customer, subscriptionStartDate } = req.body || {};
 
   if (!Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: 'Order must include at least one item.' });
@@ -820,6 +821,10 @@ app.post('/api/orders', async (req, res) => {
   });
   if (requiresAccount && !user) {
     return res.status(401).json({ error: 'Please sign up or log in to order Monthly packages.' });
+  }
+  const preferredStartDate = subscriptionStartDate ?? todayISTStr();
+  if (requiresAccount && (!isValidDateString(preferredStartDate) || preferredStartDate < todayISTStr())) {
+    return res.status(400).json({ error: 'Choose a valid subscription start date from today onward (IST).' });
   }
 
   let total = 0;
@@ -880,7 +885,7 @@ app.post('/api/orders', async (req, res) => {
   db.data.orders.push(order);
 
   if (user) {
-    const startDate = todayISTStr();
+    const startDate = preferredStartDate;
     for (const item of orderItems) {
       if (item.name.toLowerCase().startsWith('monthly')) {
         db.data.subscriptions.push({

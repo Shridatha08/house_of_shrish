@@ -59,6 +59,14 @@ export default function AdminHolidays() {
   const [addingManualSubscription, setAddingManualSubscription] = useState(false);
   const [manualSubscriptionError, setManualSubscriptionError] = useState('');
   const [manualSubscriptionSaved, setManualSubscriptionSaved] = useState(false);
+  const [subscriptionOrderDate, setSubscriptionOrderDate] = useState(() => {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit'
+    }).formatToParts(new Date());
+    const value = (type) => parts.find((part) => part.type === type).value;
+    return `${value('year')}-${value('month')}-${value('day')}`;
+  });
+  const [refreshingSubscriptionOrders, setRefreshingSubscriptionOrders] = useState(false);
 
   const [users, setUsers] = useState([]);
   const [usersError, setUsersError] = useState('');
@@ -248,28 +256,6 @@ export default function AdminHolidays() {
     }
   }
 
-  async function handleAddManualSubscription(event) {
-    event.preventDefault();
-    setManualSubscriptionError('');
-    setManualSubscriptionSaved(false);
-    setAddingManualSubscription(true);
-    try {
-      const subscription = await addAdminSubscription({
-        userId: Number(manualUserId),
-        itemId: Number(manualItemId),
-        startDate: manualStartDate
-      }, adminKey);
-      setSubscriptions((previous) => [subscription, ...previous]);
-      setManualSubscriptionSaved(true);
-      setManualUserId('');
-      setManualItemId('');
-    } catch (err) {
-      setManualSubscriptionError(err.message);
-    } finally {
-      setAddingManualSubscription(false);
-    }
-  }
-
   async function handleRemoveUser(user) {
     setUsersError('');
     setRemovingUserId(user.id);
@@ -282,6 +268,34 @@ export default function AdminHolidays() {
       setRemovingUserId(null);
     }
   }
+
+  async function refreshSubscriptionOrders() {
+    setSubsError('');
+    setRefreshingSubscriptionOrders(true);
+    try {
+      setSubscriptions(await getAdminSubscriptions(adminKey));
+    } catch (err) {
+      setSubsError(err.message);
+    } finally {
+      setRefreshingSubscriptionOrders(false);
+    }
+  }
+
+  const dailySubscriptionMeals = subscriptions.filter((subscription) => subscription.approved)
+    .flatMap((subscription) => (subscription.schedule || [])
+      .filter((entry) => entry.date === subscriptionOrderDate)
+      .map((entry) => ({
+        ...entry,
+        subscriptionId: subscription.id,
+        customerName: subscription.customerName,
+        customerPhone: subscription.customerPhone,
+        address: users.find((user) => user.id === subscription.userId)?.address || '',
+        packageName: subscription.itemName
+      })));
+  const preparationMeals = dailySubscriptionMeals.filter((entry) => entry.status !== 'skipped');
+  const skippedSubscriptionMeals = dailySubscriptionMeals.filter((entry) => entry.status === 'skipped');
+  const lunchCount = preparationMeals.filter((entry) => entry.meal === 'lunch').length;
+  const dinnerCount = preparationMeals.filter((entry) => entry.meal === 'dinner').length;
 
   async function handleOrderStatus(order, status) {
     setOrdersError('');
@@ -522,60 +536,87 @@ export default function AdminHolidays() {
         </button>
       </form>
 
-      <h3 style={{ marginTop: 24 }}>Add Offline Subscription</h3>
-      <form className="checkout-form" onSubmit={handleAddManualSubscription}>
+      <h2 style={{ marginTop: 32 }}>Fixed Subscription Orders</h2>
+      <div className="subscription-order-toolbar">
         <label>
-          Registered user
-          <select value={manualUserId} onChange={(event) => setManualUserId(event.target.value)} required>
-            <option value="">Choose a user</option>
-            {users.map((user) => <option key={user.id} value={user.id}>{user.name} · {user.phone}</option>)}
-          </select>
+          Service date (IST)
+          <input type="date" value={subscriptionOrderDate} onChange={(event) => setSubscriptionOrderDate(event.target.value)} required />
         </label>
-        <label>
-          Monthly package
-          <select value={manualItemId} onChange={(event) => setManualItemId(event.target.value)} required>
-            <option value="">Choose a package</option>
-            {menuItems.filter((item) => item.name.toLowerCase().startsWith('monthly')).map((item) => (
-              <option key={item.id} value={item.id}>{item.name}</option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Start date
-          <input type="date" value={manualStartDate} onChange={(event) => setManualStartDate(event.target.value)} required />
-        </label>
-        <p className="status-text">This offline subscription is approved for {workingDays || 'configured'} working days.</p>
-        {manualSubscriptionError && <p className="status-text error">{manualSubscriptionError}</p>}
-        {manualSubscriptionSaved && <p className="status-text">Offline subscription added and approved.</p>}
-        <button className="btn-primary" type="submit" disabled={addingManualSubscription || users.length === 0}>
-          {addingManualSubscription ? 'Adding…' : 'Add Subscription'}
+        <button type="button" className="btn-add" onClick={refreshSubscriptionOrders} disabled={refreshingSubscriptionOrders}>
+          {refreshingSubscriptionOrders ? 'Refreshing...' : 'Refresh'}
         </button>
-      </form>
+      </div>
+      {subsError && <p className="status-text error">{subsError}</p>}
+      <dl className="subscription-preparation-totals">
+        <div><dt>Lunch meals</dt><dd>{lunchCount}</dd></div>
+        <div><dt>Dinner meals</dt><dd>{dinnerCount}</dd></div>
+        <div><dt>Skipped meals</dt><dd>{skippedSubscriptionMeals.length}</dd></div>
+      </dl>
+      {['lunch', 'dinner'].map((meal) => (
+        <section key={meal} className="subscription-daily-section">
+          <h3>{meal === 'lunch' ? 'Lunch' : 'Dinner'}</h3>
+          {preparationMeals.filter((entry) => entry.meal === meal).length === 0 ? (
+            <p className="status-text">No subscription meals for this service.</p>
+          ) : preparationMeals.filter((entry) => entry.meal === meal).map((entry) => (
+            <div key={`${entry.subscriptionId}:${entry.meal}`} className="subscription-service-row">
+              <strong>{entry.customerName}</strong>
+              <span>{entry.customerPhone}</span>
+              <span>{entry.packageName}</span>
+              <span>{entry.address || 'No saved delivery address'}</span>
+            </div>
+          ))}
+        </section>
+      ))}
+      <section className="subscription-daily-section">
+        <h3>Skipped / Carried Forward</h3>
+        {skippedSubscriptionMeals.length === 0 ? <p className="status-text">No skipped subscription meals for this date.</p> : skippedSubscriptionMeals.map((entry) => (
+          <div key={`${entry.subscriptionId}:${entry.meal}`} className="subscription-service-row">
+            <strong>{entry.customerName}</strong>
+            <span>{entry.customerPhone}</span>
+            <span>{entry.meal === 'lunch' ? 'Lunch' : 'Dinner'} skipped</span>
+            <span>Carried forward</span>
+          </div>
+        ))}
+      </section>
 
-      <h2 style={{ marginTop: 32 }}>Order Dashboard</h2>
+      <h2 style={{ marginTop: 32 }}>Purchase Orders</h2>
       {ordersError && <p className="status-text error">{ordersError}</p>}
       {orders.length === 0 ? (
         <p className="status-text">No orders yet.</p>
       ) : (
         <div className="subscription-list">
-          {orders.map((order) => (
+          {orders.map((order) => {
+            const monthlyItems = order.items.filter((item) => item.name.toLowerCase().startsWith('monthly'));
+            const subscriptionOnly = monthlyItems.length === order.items.length && monthlyItems.length > 0;
+            const linkedSubscriptions = subscriptions.filter((subscription) => subscription.orderId === order.id);
+            const subscriptionApproved = monthlyItems.length > 0 && monthlyItems.every((item) =>
+              linkedSubscriptions.some((subscription) => subscription.itemName === item.name && subscription.approved)
+            );
+            const approvalLabel = subscriptionApproved ? 'Subscription approved' : 'Pending approval';
+            return (
             <div key={order.id} className="subscription-card">
               <div className="subscription-card-header">
                 <strong>#{order.orderNumber || order.id}</strong>
                 <span>{order.customer.name} · {order.customer.phone}</span>
-                <span className="subscription-badge active">{order.status.replaceAll('_', ' ')}</span>
+                <span className={`subscription-badge ${subscriptionOnly && !subscriptionApproved ? 'pending' : 'active'}`}>
+                  {subscriptionOnly ? approvalLabel : order.status.replaceAll('_', ' ')}
+                </span>
               </div>
               <p className="subscription-item-name">{order.items.map((item) => `${item.name} × ${item.quantity}`).join(', ')}</p>
-              <p className="subscription-summary-dates">₹{order.total} · Delivery: {order.scheduledDate ? `${order.scheduledDate} · ${order.timeSlot}` : 'No scheduled delivery'}</p>
+              {monthlyItems.length > 0 && !subscriptionOnly && <p className="subscription-summary-dates">Monthly package: {approvalLabel}</p>}
+              <p className="subscription-summary-dates">
+                ₹{order.total}{!subscriptionOnly && ` · Delivery: ${order.scheduledDate ? `${order.scheduledDate} · ${order.timeSlot}` : 'No scheduled delivery'}`}
+              </p>
               <p className="subscription-summary-dates">{order.customer.address}</p>
               <div className="order-actions">
-                {['paid', 'preparing'].includes(order.status) && <button type="button" className="btn-add" onClick={() => handleOrderStatus(order, 'preparing')} disabled={updatingOrderId === order.id}>Preparing</button>}
-                {['preparing'].includes(order.status) && <button type="button" className="btn-add" onClick={() => handleOrderStatus(order, 'out_for_delivery')} disabled={updatingOrderId === order.id}>Out for delivery</button>}
-                {['out_for_delivery'].includes(order.status) && <button type="button" className="btn-add" onClick={() => handleOrderStatus(order, 'delivered')} disabled={updatingOrderId === order.id}>Delivered</button>}
+                {!subscriptionOnly && ['paid', 'preparing'].includes(order.status) && <button type="button" className="btn-add" onClick={() => handleOrderStatus(order, 'preparing')} disabled={updatingOrderId === order.id}>Preparing</button>}
+                {!subscriptionOnly && ['preparing'].includes(order.status) && <button type="button" className="btn-add" onClick={() => handleOrderStatus(order, 'out_for_delivery')} disabled={updatingOrderId === order.id}>Out for delivery</button>}
+                {!subscriptionOnly && ['out_for_delivery'].includes(order.status) && <button type="button" className="btn-add" onClick={() => handleOrderStatus(order, 'delivered')} disabled={updatingOrderId === order.id}>Delivered</button>}
                 {['refund_requested'].includes(order.status) && <button type="button" className="btn-add" onClick={() => handleOrderStatus(order, 'refunded')} disabled={updatingOrderId === order.id}>Mark refunded</button>}
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 

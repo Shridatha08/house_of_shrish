@@ -5,6 +5,14 @@ import { useAuth } from '../context/AuthContext';
 import { placeOrder } from '../api';
 import LocationPicker from '../components/LocationPicker';
 
+function todayIST() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).formatToParts(new Date());
+  const value = (type) => parts.find((part) => part.type === type).value;
+  return `${value('year')}-${value('month')}-${value('day')}`;
+}
+
 export default function Checkout() {
   const { items, decreaseItem, addItem, removeItem, total } = useCart();
   const { user, token } = useAuth();
@@ -14,6 +22,7 @@ export default function Checkout() {
   const [phone, setPhone] = useState('');
   const [address, setAddress] = useState('');
   const [position, setPosition] = useState(null);
+  const [subscriptionStartDate, setSubscriptionStartDate] = useState(todayIST);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -49,6 +58,10 @@ export default function Checkout() {
       setError('Please sign up or log in to order Monthly packages.');
       return;
     }
+    if (requiresAccount && (!subscriptionStartDate || subscriptionStartDate < todayIST())) {
+      setError('Choose a subscription start date from today onward.');
+      return;
+    }
     if (!/^\d{10}$/.test(phone.trim())) {
       setError('Enter a valid 10-digit phone number.');
       return;
@@ -69,7 +82,8 @@ export default function Checkout() {
             address,
             lat: position?.lat ?? null,
             lng: position?.lng ?? null
-          }
+          },
+          ...(requiresAccount ? { subscriptionStartDate } : {})
         },
         token
       );
@@ -137,6 +151,12 @@ export default function Checkout() {
           Delivery address
           <textarea value={address} onChange={(e) => setAddress(e.target.value)} rows={3} required />
         </label>
+        {requiresAccount && (
+          <label>
+            Preferred subscription start date (IST)
+            <input type="date" value={subscriptionStartDate} min={todayIST()} onChange={(event) => setSubscriptionStartDate(event.target.value)} required />
+          </label>
+        )}
         <div className="location-section">
           <div className="location-header">
             <span>Pin your location</span>

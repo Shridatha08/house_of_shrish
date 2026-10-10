@@ -739,6 +739,56 @@
   width: 140px;
 }
 
+.subscription-order-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.subscription-order-toolbar label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.subscription-order-toolbar input {
+  padding: 8px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  font: inherit;
+}
+
+.subscription-preparation-totals {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 20px 0;
+  padding: 12px 0;
+  border-top: 1px solid #ddd;
+  border-bottom: 1px solid #ddd;
+}
+
+.subscription-preparation-totals dt {
+  font-size: 0.8rem;
+}
+
+.subscription-preparation-totals dd {
+  margin: 4px 0 0;
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.subscription-service-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 0;
+  border-bottom: 1px solid #eee;
+  overflow-wrap: anywhere;
+  font-size: 0.85rem;
+}
+
 .subscription-end-date {
   display: flex;
   flex-direction: column;
