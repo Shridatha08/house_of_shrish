@@ -15,6 +15,8 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [address, setAddress] = useState('');
+  const [flatNumber, setFlatNumber] = useState('');
+  const [pincode, setPincode] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [forgotPassword, setForgotPassword] = useState(false);
@@ -35,7 +37,7 @@ export default function Login() {
     setSubmitting(true);
     try {
       if (mode === 'register') {
-        await register({ name, phone, password, address });
+        await register({ name, phone, password, address, flatNumber, pincode });
       } else {
         await login({ phone, password });
       }
@@ -175,10 +177,20 @@ export default function Login() {
             />
           </label>
           {mode === 'register' && (
+            <>
+            <label>
+              Flat / door number
+              <input value={flatNumber} onChange={(event) => setFlatNumber(event.target.value)} maxLength={100} autoComplete="address-line1" required />
+            </label>
             <label>
               Delivery address
               <textarea value={address} onChange={(e) => setAddress(e.target.value)} rows={3} required />
             </label>
+            <label>
+              Pincode
+              <input value={pincode} onChange={(event) => setPincode(event.target.value)} inputMode="numeric" pattern="[1-9][0-9]{5}" maxLength={6} autoComplete="postal-code" required />
+            </label>
+            </>
           )}
           <label>
             Password

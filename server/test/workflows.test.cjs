@@ -1,0 +1,292 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const crypto = require('node:crypto');
+
+const source = fs.readFileSync(path.join(__dirname, '../index.js'), 'utf8');
+const dbSource = fs.readFileSync(path.join(__dirname, '../db.js'), 'utf8');
+const customer = { name: 'Test Customer', phone: '9000000000', address: 'Test Street', flatNumber: 'A-12', pincode: '560075' };
+const now = '2026-10-10T04:00:00Z';
+
+function fixture() {
+  return {
+    revision: 0,
+    users: [{ ...customer, id: 1, passwordHash: 'hashed:password' }],
+    sessions: [{ userId: 1, token: 'user-token', createdAt: now }],
+    orders: [], subscriptions: [], passwordResetRequests: [], holidays: [],
+    settings: { subscriptionWorkingDays: 2, dailyOrderCapacity: 50, kitchenClosedDates: [], lunchCutoffTime: '11:00', dinnerCutoffTime: '18:30' },
+    menu: [
+      { id: 1, name: 'Single Meal', category: 'Pure Veg Meals', price: 129, customisations: ['Meal A', 'Meal B'] },
+      { id: 2, name: 'Monthly (Lunch)', category: 'Pure Veg Meals', price: 3299, customisations: ['Meal A', 'Meal B'] },
+      { id: 4, name: 'Monthly (Lunch + Dinner)', category: 'Pure Veg Meals', price: 5499, customisations: ['Meal A', 'Meal B'] },
+      { id: 6, name: 'Dry Fruits Ladoo', category: 'Artisanal Sweets', price: 299, variants: [{ label: '200g', price: 299 }, { label: '500g', price: 699 }] }
+    ]
+  };
+}
+
+function application(data = fixture()) {
+  let state = structuredClone(data);
+  let clock = new Date(now).getTime();
+  const routes = new Map();
+  const app = { use() {}, set() {}, listen() {} };
+  for (const method of ['get', 'post', 'patch', 'delete']) {
+    app[method] = (route, ...handlers) => routes.set(`${method}:${route}`, handlers.at(-1));
+  }
+  const express = () => app;
+  express.json = () => () => {};
+  const context = {
+    express, cors: () => () => {}, crypto, Buffer, structuredClone,
+    process: { env: { ADMIN_KEY: 'test-admin' } }, console,
+    bcrypt: { hash: async (password) => `hashed:${password}`, compare: async (password, hash) => hash === `hashed:${password}` },
+    Date: class extends Date { constructor(...args) { super(...(args.length ? args : [clock])); } static now() { return clock; } },
+    getDb: async () => {
+      const snapshot = structuredClone(state);
+      return { data: snapshot, write: async () => {
+        if (snapshot.revision !== state.revision) throw Object.assign(new Error('Stale write'), { status: 409 });
+        snapshot.revision++;
+        state = structuredClone(snapshot);
+      } };
+    }
+  };
+  vm.createContext(context);
+  vm.runInContext(source.replace(/^import .*;\r?$/gm, ''), context);
+  return {
+    context,
+    state: () => state,
+    clock: (value) => { clock = new Date(value).getTime(); },
+    async request(method, route, body = {}, params = {}, headers = { authorization: 'Bearer user-token' }) {
+      const response = { code: 200, status(code) { this.code = code; return this; }, json(value) { this.body = value; return this; }, end() { return this; } };
+      try {
+        await routes.get(`${method}:${route}`)({ body, params, headers }, response);
+      } catch (error) {
+        response.code = error.status || 500;
+        response.body = { error: error.message };
+      }
+      return response;
+    }
+  };
+}
+
+async function purchase(app, itemId = 1, extra = {}) {
+  return app.request('post', '/api/orders', {
+    items: [{ id: itemId, quantity: 1, customisation: itemId === 6 ? '200g' : 'Meal A' }], customer, ...extra
+  });
+}
+
+const adminHeaders = { 'x-admin-key': 'test-admin' };
+
+test('registration and profile require, store, and return flat number and pincode', async () => {
+  const app = application();
+  const invalid = await app.request('post', '/api/auth/register', { ...customer, phone: '9111111111', pincode: '123', password: 'password' });
+  assert.equal(invalid.code, 400);
+  const registered = await app.request('post', '/api/auth/register', { ...customer, phone: '9111111111', password: 'password' });
+  assert.equal(registered.code, 201);
+  assert.equal(registered.body.user.flatNumber, 'A-12');
+  assert.equal(registered.body.user.pincode, '560075');
+  const updated = await app.request('patch', '/api/auth/profile', { ...customer, flatNumber: 'B-7' });
+  assert.equal(updated.body.user.flatNumber, 'B-7');
+});
+
+test('customer payment submission requires admin verification before invoice and fulfillment', async () => {
+  const app = application();
+  const created = await purchase(app);
+  assert.equal(created.code, 201);
+  const id = created.body.order.id;
+  const submitted = await app.request('patch', '/api/orders/:id/mark-paid', {}, { id });
+  assert.equal(submitted.body.status, 'payment_review');
+  assert.equal((await app.request('get', '/api/orders/:id/invoice', {}, { id })).code, 409);
+  assert.equal((await app.request('patch', '/api/admin/orders/:id/status', { status: 'preparing' }, { id }, adminHeaders)).code, 409);
+  assert.equal((await app.request('patch', '/api/admin/orders/:id/status', { status: 'paid' }, { id }, adminHeaders)).code, 200);
+  const invoice = await app.request('get', '/api/orders/:id/invoice', {}, { id });
+  assert.equal(invoice.code, 200);
+  assert.equal(invoice.body.customer.pincode, '560075');
+  assert.equal((await app.request('patch', '/api/admin/orders/:id/status', { status: 'preparing' }, { id }, adminHeaders)).code, 200);
+  assert.equal((await app.request('patch', '/api/admin/orders/:id/status', { status: 'paid' }, { id }, adminHeaders)).code, 409);
+});
+
+test('guest order recovery requires its access token and returns the payment URI', async () => {
+  const app = application();
+  const created = await app.request('post', '/api/orders', { items: [{ id: 6, quantity: 1, customisation: '500g', price: 1 }], customer }, {}, {});
+  const id = created.body.order.id;
+  assert.equal(created.body.order.total, 699);
+  assert.equal((await app.request('get', '/api/orders/:id', {}, { id }, {})).code, 403);
+  const loaded = await app.request('get', '/api/orders/:id', {}, { id }, { 'x-order-token': created.body.accessToken });
+  assert.equal(loaded.code, 200);
+  assert.ok(loaded.body.upiUri.includes('am=699'));
+  assert.equal(loaded.body.accessToken, undefined);
+});
+
+test('cancelled unpaid orders cannot request refunds or obtain invoices', async () => {
+  const app = application();
+  const created = await purchase(app);
+  const id = created.body.order.id;
+  assert.equal((await app.request('patch', '/api/orders/:id/cancel', {}, { id })).code, 200);
+  assert.equal((await app.request('post', '/api/orders/:id/refund-request', {}, { id })).code, 409);
+  assert.equal((await app.request('get', '/api/orders/:id/invoice', {}, { id })).code, 409);
+});
+
+test('paid cancellation preserves refund eligibility and disables the subscription', async () => {
+  const app = application();
+  const created = await purchase(app, 2, { subscriptionStartDate: '2026-10-12' });
+  const id = created.body.order.id;
+  const subId = app.state().subscriptions[0].id;
+  assert.equal((await app.request('patch', '/api/admin/subscriptions/:id/approve', {}, { id: subId }, adminHeaders)).code, 409);
+  await app.request('patch', '/api/orders/:id/mark-paid', {}, { id });
+  await app.request('patch', '/api/admin/orders/:id/status', { status: 'paid' }, { id }, adminHeaders);
+  assert.equal((await app.request('patch', '/api/admin/subscriptions/:id/approve', {}, { id: subId }, adminHeaders)).code, 200);
+  await app.request('patch', '/api/orders/:id/cancel', {}, { id });
+  assert.equal(app.state().subscriptions[0].deactivated, true);
+  assert.equal((await app.request('get', '/api/subscriptions/me')).body.length, 0);
+  assert.equal((await app.request('patch', '/api/admin/subscriptions/:id/approve', {}, { id: subId }, adminHeaders)).code, 409);
+  assert.equal((await app.request('post', '/api/orders/:id/refund-request', {}, { id })).code, 200);
+  assert.equal((await app.request('patch', '/api/admin/orders/:id/status', { status: 'refunded' }, { id }, adminHeaders)).code, 200);
+});
+
+test('monthly quantities are restricted; duplicate stock lines cannot bypass limits', async () => {
+  const data = fixture();
+  data.menu[0].dailyStock = 1;
+  const app = application(data);
+  assert.equal((await purchase(app, 2, { items: [{ id: 2, quantity: 2, customisation: 'Meal A' }] })).code, 400);
+  const split = await purchase(app, 1, { items: [{ id: 1, quantity: 1, customisation: 'Meal A' }, { id: 1, quantity: 1, customisation: 'Meal B' }] });
+  assert.equal(split.code, 409);
+});
+
+test('stock is calculated per item in IST and sold-out products are unavailable', async () => {
+  const data = fixture();
+  data.menu[0].dailyStock = 1;
+  data.orders = [{ id: 10, createdAt: now, status: 'paid', items: [{ id: 6, quantity: 20 }] }];
+  const app = application(data);
+  let menu = await app.request('get', '/api/menu');
+  assert.equal(menu.body.find((item) => item.id === 1).remainingStock, 1);
+  await purchase(app);
+  menu = await app.request('get', '/api/menu');
+  assert.equal(menu.body.find((item) => item.id === 1).available, false);
+});
+
+test('kitchen capacity includes active subscription meals but excludes ladoo purchases', async () => {
+  const data = fixture();
+  data.settings.dailyOrderCapacity = 2;
+  data.subscriptions = [{ id: 'offline', userId: 1, approved: true, itemName: 'Monthly (Lunch + Dinner)', startDate: '2026-10-10', workingDaysRequired: 2 }];
+  const app = application(data);
+  assert.equal((await purchase(app)).code, 409);
+  assert.equal((await purchase(app, 6)).code, 201);
+});
+
+test('expired pending orders release stock and cannot submit payment', async () => {
+  const data = fixture();
+  data.menu[0].dailyStock = 1;
+  data.orders = [{ id: 10, userId: 1, createdAt: '2026-10-10T03:00:00Z', status: 'pending_payment', items: [{ id: 1, quantity: 1 }] }];
+  const app = application(data);
+  assert.equal((await purchase(app)).code, 201);
+  assert.equal((await app.request('patch', '/api/orders/:id/mark-paid', {}, { id: 10 })).code, 409);
+});
+
+test('closed dates, Sundays, and skips are excluded from subscription entitlements', () => {
+  const data = fixture();
+  data.settings.kitchenClosedDates = ['2026-10-12'];
+  const app = application(data);
+  const subscription = { startDate: '2026-10-10', workingDaysRequired: 1, itemName: 'Monthly (Lunch + Dinner)', skippedMeals: [{ date: '2026-10-10', meal: 'dinner' }] };
+  const schedule = app.context.buildSubscriptionSchedule(subscription, app.context.subscriptionHolidays(data));
+  assert.equal(schedule.endDate, '2026-10-13');
+  assert.equal(schedule.schedule.at(-1).meal, 'lunch');
+});
+
+test('approval after lunch cutoff advances the first service', async () => {
+  const app = application();
+  const created = await purchase(app, 4);
+  const id = created.body.order.id;
+  await app.request('patch', '/api/orders/:id/mark-paid', {}, { id });
+  await app.request('patch', '/api/admin/orders/:id/status', { status: 'paid' }, { id }, adminHeaders);
+  app.clock('2026-10-10T06:00:00Z');
+  const approved = await app.request('patch', '/api/admin/subscriptions/:id/approve', {}, { id: app.state().subscriptions[0].id }, adminHeaders);
+  assert.equal(approved.body.startDate, '2026-10-11');
+  assert.equal(approved.body.schedule[0].date, '2026-10-12');
+});
+
+test('reset keys are single-use, revoke sessions, and concurrent consumption cannot both succeed', async () => {
+  const app = application();
+  await app.request('post', '/api/auth/password-reset/request', { phone: customer.phone });
+  const issued = await app.request('post', '/api/admin/password-reset-requests/:id/issue-key', {}, { id: app.state().passwordResetRequests[0].id }, adminHeaders);
+  const payload = { phone: customer.phone, resetKey: issued.body.resetKey, password: 'new-password' };
+  const results = await Promise.all([app.request('post', '/api/auth/password-reset/complete', payload), app.request('post', '/api/auth/password-reset/complete', payload)]);
+  assert.equal(results.filter((result) => result.code === 204).length, 1);
+  assert.equal(app.state().sessions.length, 0);
+  assert.equal((await app.request('post', '/api/auth/password-reset/complete', payload)).code, 400);
+  assert.equal(app.state().users[0].passwordHash, 'hashed:new-password');
+});
+
+test('expired sessions cannot access profiles; logout revokes current token', async () => {
+  const app = application();
+  app.clock('2026-12-01T04:00:00Z');
+  assert.equal((await app.request('get', '/api/auth/me')).code, 401);
+  assert.equal((await app.request('post', '/api/auth/logout')).code, 204);
+  assert.equal(app.state().sessions.length, 0);
+});
+
+test('expired reset keys fail without changing a password', async () => {
+  const app = application();
+  await app.request('post', '/api/auth/password-reset/request', { phone: customer.phone });
+  const issued = await app.request('post', '/api/admin/password-reset-requests/:id/issue-key', {}, { id: app.state().passwordResetRequests[0].id }, adminHeaders);
+  app.clock('2026-10-10T04:31:00Z');
+  const result = await app.request('post', '/api/auth/password-reset/complete', { phone: customer.phone, resetKey: issued.body.resetKey, password: 'new-password' });
+  assert.equal(result.code, 400);
+  assert.equal(app.state().users[0].passwordHash, 'hashed:password');
+});
+
+test('subscription skip enforces ownership, cutoff, and duplicate protection', async () => {
+  const data = fixture();
+  data.subscriptions = [{ id: 'offline', userId: 1, approved: true, itemName: 'Monthly (Lunch + Dinner)', startDate: '2026-10-10', workingDaysRequired: 2 }];
+  const app = application(data);
+  assert.equal((await app.request('post', '/api/subscriptions/:id/skip', { date: '2026-10-10', meal: 'lunch' }, { id: 'offline' }, {})).code, 401);
+  app.clock('2026-10-10T05:30:00Z');
+  assert.equal((await app.request('post', '/api/subscriptions/:id/skip', { date: '2026-10-10', meal: 'lunch' }, { id: 'offline' })).code, 409);
+  assert.equal((await app.request('post', '/api/subscriptions/:id/skip', { date: '2026-10-10', meal: 'dinner' }, { id: 'offline' })).code, 200);
+  assert.equal((await app.request('post', '/api/subscriptions/:id/skip', { date: '2026-10-10', meal: 'dinner' }, { id: 'offline' })).code, 409);
+  assert.equal(app.state().subscriptions[0].skippedMeals.length, 1);
+});
+
+test('Single Meal lunch/dinner cutoffs remain IST while monthly/ladoo can order after hours', async () => {
+  const app = application();
+  app.clock('2026-10-10T05:29:00Z');
+  assert.equal((await purchase(app)).body.order.mealService, 'lunch');
+  app.clock('2026-10-10T05:30:00Z');
+  assert.equal((await purchase(app)).body.order.mealService, 'dinner');
+  app.clock('2026-10-10T13:00:00Z');
+  assert.equal((await purchase(app)).code, 409);
+  assert.equal((await purchase(app, 2)).code, 201);
+  assert.equal((await purchase(app, 6)).code, 201);
+});
+
+test('future preferred start dates are stored, invalid/past dates rejected', async () => {
+  const app = application();
+  assert.equal((await purchase(app, 2, { subscriptionStartDate: '2026-99-99' })).code, 400);
+  assert.equal((await purchase(app, 2, { subscriptionStartDate: '2026-10-09' })).code, 400);
+  assert.equal((await purchase(app, 2, { subscriptionStartDate: '2026-11-01' })).code, 201);
+  assert.equal(app.state().subscriptions[0].startDate, '2026-11-01');
+});
+
+test('actual persistence adapter rejects competing snapshots instead of losing data', async () => {
+  let state;
+  const collection = {
+    async findOne() { return structuredClone(state); },
+    async updateOne(filter, update) {
+      if (update.$setOnInsert) { state ||= { _id: 'main', ...structuredClone(update.$setOnInsert) }; return { matchedCount: 1 }; }
+      const matches = typeof filter.revision === 'object' ? state.revision === undefined : state.revision === filter.revision;
+      if (!matches) return { matchedCount: 0 };
+      Object.assign(state, structuredClone(update.$set));
+      return { matchedCount: 1 };
+    }
+  };
+  const context = { structuredClone, process: { env: { MONGODB_URI: 'mock' } }, MongoClient: class { connect() { return Promise.resolve({ db: () => ({ collection: () => collection }) }); } } };
+  vm.createContext(context);
+  vm.runInContext(dbSource.replace(/^import .*;\r?$/gm, '').replace('export async function', 'async function'), context);
+  const first = await context.getDb();
+  const second = await context.getDb();
+  first.data.orders.push({ id: 1 });
+  await first.write();
+  second.data.orders.push({ id: 2 });
+  await assert.rejects(second.write(), (error) => error.status === 409);
+  assert.equal(state.orders.length, 1);
+});

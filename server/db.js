@@ -72,19 +72,19 @@ export async function getDb() {
   const client = await getClient();
   const collection = client.db(MONGODB_DB_NAME).collection('appData');
 
+  await collection.updateOne({ _id: 'main' }, { $setOnInsert: structuredClone(defaultData) }, { upsert: true });
   let doc = await collection.findOne({ _id: 'main' });
-  if (!doc) {
-    doc = { _id: 'main', ...structuredClone(defaultData) };
-    await collection.insertOne(doc);
-  }
+  const revision = doc.revision;
+  const revisionFilter = revision === undefined ? { $exists: false } : revision;
+  const nextRevision = (revision || 0) + 1;
 
   const menuWithoutChocolates = doc.menu.filter((item) => item.id !== 5 && item.category !== 'Artisanal Chocolates');
+  let menuMigrated = false;
   if (menuWithoutChocolates.length !== doc.menu.length) {
     doc.menu = menuWithoutChocolates;
-    await collection.updateOne({ _id: 'main' }, { $set: { menu: doc.menu } });
+    menuMigrated = true;
   }
 
-  let menuMigrated = false;
   for (const menuItem of defaultData.menu) {
     const existingItem = doc.menu.find((item) => item.id === menuItem.id);
     if (!existingItem) continue;
@@ -111,15 +111,24 @@ export async function getDb() {
     menuMigrated = true;
   }
   if (menuMigrated) {
-    const { _id, ...rest } = doc;
-    await collection.updateOne({ _id: 'main' }, { $set: rest });
+    const migrated = await collection.updateOne({ _id: 'main', revision: revisionFilter }, { $set: { menu: doc.menu, revision: nextRevision } });
+    if (!migrated.matchedCount) return getDb();
+    doc.revision = nextRevision;
   }
 
   return {
     data: doc,
     async write() {
-      const { _id, ...rest } = doc;
-      await collection.updateOne({ _id: 'main' }, { $set: rest }, { upsert: true });
+      const { _id, revision: currentRevision, ...rest } = doc;
+      const updated = await collection.updateOne({
+        _id: 'main', revision: currentRevision === undefined ? { $exists: false } : currentRevision
+      }, { $set: { ...rest, revision: (currentRevision || 0) + 1 } });
+      if (!updated.matchedCount) {
+        const error = new Error('Another update completed first. Please refresh and try again.');
+        error.status = 409;
+        throw error;
+      }
+      doc.revision = (currentRevision || 0) + 1;
     }
   };
 }

@@ -7,6 +7,7 @@ import { getDb } from './db.js';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
+if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
 
 const UPI_ID = 'houseofshrish@ybl';
 const MERCHANT_NAME = 'House of Shrish';
@@ -37,8 +38,11 @@ app.use(express.json());
 const rateLimitBuckets = new Map();
 function rateLimit({ windowMs, max, key = (req) => req.ip }) {
   return (req, res, next) => {
-    const bucketKey = `${key(req)}:${req.path}`;
+    const bucketKey = `${key(req)}:${req.baseUrl || req.path}`;
     const now = Date.now();
+    if (rateLimitBuckets.size > 1000) {
+      for (const [storedKey, value] of rateLimitBuckets) if (value.resetAt <= now) rateLimitBuckets.delete(storedKey);
+    }
     const bucket = rateLimitBuckets.get(bucketKey);
     if (!bucket || bucket.resetAt <= now) {
       rateLimitBuckets.set(bucketKey, { count: 1, resetAt: now + windowMs });
@@ -73,11 +77,49 @@ async function getUserFromToken(db, req) {
   if (!token) return null;
   const session = db.data.sessions.find((s) => s.token === token);
   if (!session) return null;
+  if (!session.createdAt || Date.now() - new Date(session.createdAt).getTime() >= 30 * 24 * 60 * 60 * 1000) return null;
   return db.data.users.find((u) => u.id === session.userId) || null;
 }
 
 function publicUser(user) {
-  return { id: user.id, name: user.name, phone: user.phone, address: user.address || '' };
+  return { id: user.id, name: user.name, phone: user.phone, address: user.address || '', flatNumber: user.flatNumber || '', pincode: user.pincode || '' };
+}
+
+function validDeliveryDetails(details) {
+  return typeof details.flatNumber === 'string' && details.flatNumber.trim().length > 0 && details.flatNumber.length <= 100 &&
+    typeof details.pincode === 'string' && /^[1-9]\d{5}$/.test(details.pincode.trim());
+}
+
+function businessDate(iso) {
+  return new Date(new Date(iso).getTime() + 330 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+function reservesStock(order) {
+  if (['cancelled', 'refund_requested', 'refunded'].includes(order.status)) return false;
+  return order.status !== 'pending_payment' || Date.now() - new Date(order.createdAt).getTime() < 30 * 60 * 1000;
+}
+
+function subscriptionInService(subscription, data) {
+  if (!subscription.approved || subscription.deactivated) return false;
+  if (!subscription.orderId) return true;
+  const order = data.orders.find((entry) => entry.id === subscription.orderId);
+  return Boolean(order && paymentStatus(order) === 'verified' && !['cancelled', 'refund_requested', 'refunded'].includes(order.status));
+}
+
+function stockUsed(data, date, itemId) {
+  return data.orders.filter((order) => reservesStock(order) && businessDate(order.createdAt) === date)
+    .reduce((total, order) => total + order.items.filter((item) => item.id === itemId).reduce((quantity, item) => quantity + item.quantity, 0), 0);
+}
+
+function kitchenMealCount(data, date) {
+  const menuById = new Map(data.menu.map((item) => [item.id, item]));
+  const purchases = data.orders.filter((order) => reservesStock(order) && (order.scheduledDate || businessDate(order.createdAt)) === date)
+    .reduce((total, order) => total + order.items.filter((item) => menuById.get(item.id)?.category === 'Pure Veg Meals' && !item.name.toLowerCase().startsWith('monthly'))
+      .reduce((quantity, item) => quantity + item.quantity, 0), 0);
+  const subscriptions = data.subscriptions.filter((subscription) => subscriptionInService(subscription, data))
+    .reduce((total, subscription) => total + buildSubscriptionSchedule(subscription, subscriptionHolidays(data)).schedule
+      .filter((entry) => entry.date === date && entry.status !== 'skipped').length, 0);
+  return purchases + subscriptions;
 }
 
 function getOrderToken(req) {
@@ -85,7 +127,22 @@ function getOrderToken(req) {
 }
 
 function canAccessOrder(order, user, req) {
-  return (user && order.userId === user.id) || order.accessToken === getOrderToken(req);
+  return Boolean((user && order.userId === user.id) || (order.accessToken && order.accessToken === getOrderToken(req)));
+}
+
+function paymentStatus(order) {
+  return order.paymentStatus || (['paid', 'preparing', 'out_for_delivery', 'delivered', 'refunded'].includes(order.status) ? 'verified' : 'unpaid');
+}
+
+function deactivateSubscriptions(data, order) {
+  for (const subscription of data.subscriptions.filter((entry) => entry.orderId === order.id)) {
+    subscription.approved = false;
+    subscription.deactivated = true;
+  }
+}
+
+function subscriptionHolidays(data) {
+  return [...data.holidays, ...getSettings(data).kitchenClosedDates.map((date) => ({ date }))];
 }
 
 function isValidDateString(value) {
@@ -175,7 +232,7 @@ function buildSubscriptionSchedule(subscription, holidays) {
   const mealSlots = Array.isArray(subscription.mealSlots) && subscription.mealSlots.length
     ? ['lunch', 'dinner'].filter((meal) => subscription.mealSlots.includes(meal))
     : getSubscriptionMealSlots(subscription.itemName);
-  if (!isValidDateString(subscription.startDate) || !Number.isInteger(requiredDays) || requiredDays < 1) {
+  if (subscription.deactivated || !isValidDateString(subscription.startDate) || !Number.isInteger(requiredDays) || requiredDays < 1) {
     return { mealSlots, schedule: [], endDate: null, daysRemaining: 0, remainingMeals: 0, expiresToday: false, expired: true };
   }
 
@@ -197,7 +254,7 @@ function buildSubscriptionSchedule(subscription, holidays) {
           schedule.push({ date, meal, status: 'skipped', canCancel: false });
           continue;
         }
-        const status = date < today ? 'completed' : 'upcoming';
+        const status = date < today ? 'elapsed' : 'upcoming';
         schedule.push({ date, meal, status, canCancel: status === 'upcoming' && canCancelSubscriptionMeal(date, meal) });
         deliveredMeals++;
         endDate = date;
@@ -260,7 +317,7 @@ function countWorkingDaysRemaining(today, endDate, holidays) {
 
 // POST /api/auth/register - create a new account
 app.post('/api/auth/register', authRateLimit, async (req, res) => {
-  const { name, phone, password, address } = req.body || {};
+  const { name, phone, password, address, flatNumber, pincode } = req.body || {};
 
   if (typeof name !== 'string' || !name.trim()) {
     return res.status(400).json({ error: 'Name is required.' });
@@ -275,6 +332,7 @@ app.post('/api/auth/register', authRateLimit, async (req, res) => {
     return res.status(400).json({ error: 'Address is required.' });
   }
 
+  if (!validDeliveryDetails({ flatNumber, pincode })) return res.status(400).json({ error: 'Enter a flat/door number and valid 6-digit pincode.' });
   const db = await getDb();
   if (db.data.users.some((u) => u.phone === phone.trim())) {
     return res.status(409).json({ error: 'An account with this phone number already exists.' });
@@ -282,10 +340,12 @@ app.post('/api/auth/register', authRateLimit, async (req, res) => {
 
   const passwordHash = await bcrypt.hash(password, 10);
   const user = {
-    id: Date.now(),
+    id: crypto.randomBytes(6).readUIntBE(0, 6),
     name: name.trim(),
     phone: phone.trim(),
     address: address.trim(),
+    flatNumber: flatNumber.trim(),
+    pincode: pincode.trim(),
     passwordHash,
     createdAt: new Date().toISOString()
   };
@@ -372,6 +432,7 @@ app.post('/api/auth/password-reset/complete', authRateLimit, async (req, res) =>
   }
 
   user.passwordHash = await bcrypt.hash(password, 10);
+  if (resetRequest.expiresAt <= Date.now()) return res.status(400).json({ error: 'This reset key has expired.' });
   for (const entry of db.data.passwordResetRequests) {
     if (entry.userId === user.id && entry.status !== 'completed') {
       entry.status = 'completed';
@@ -392,13 +453,21 @@ app.get('/api/auth/me', async (req, res) => {
   res.json({ user: publicUser(user) });
 });
 
+app.post('/api/auth/logout', async (req, res) => {
+  const db = await getDb();
+  const token = (req.headers.authorization || '').replace(/^Bearer /, '');
+  db.data.sessions = db.data.sessions.filter((session) => session.token !== token);
+  await db.write();
+  res.status(204).end();
+});
+
 // PATCH /api/auth/profile - update the current user's personal details
 app.patch('/api/auth/profile', async (req, res) => {
   const db = await getDb();
   const user = await getUserFromToken(db, req);
   if (!user) return res.status(401).json({ error: 'Not signed in.' });
 
-  const { name, phone, address } = req.body || {};
+  const { name, phone, address, flatNumber, pincode } = req.body || {};
   if (typeof name !== 'string' || !name.trim()) {
     return res.status(400).json({ error: 'Name is required.' });
   }
@@ -411,10 +480,13 @@ app.patch('/api/auth/profile', async (req, res) => {
   if (db.data.users.some((u) => u.id !== user.id && u.phone === phone.trim())) {
     return res.status(409).json({ error: 'Another account already uses this phone number.' });
   }
+  if (!validDeliveryDetails({ flatNumber, pincode })) return res.status(400).json({ error: 'Enter a flat/door number and valid 6-digit pincode.' });
 
   user.name = name.trim();
   user.phone = phone.trim();
   user.address = address.trim();
+  user.flatNumber = flatNumber.trim();
+  user.pincode = pincode.trim();
   await db.write();
 
   res.json({ user: publicUser(user) });
@@ -424,15 +496,11 @@ app.patch('/api/auth/profile', async (req, res) => {
 app.get('/api/menu', async (req, res) => {
   const db = await getDb();
   const settings = getSettings(db.data);
-  const today = todayStr();
-  const orderedToday = db.data.orders
-    .filter((order) => order.createdAt?.slice(0, 10) === today && !['cancelled', 'refunded'].includes(order.status))
-    .reduce((sum, order) => sum + order.items.reduce((items, item) => items + item.quantity, 0), 0);
-  res.json(db.data.menu.map((item) => ({
-    ...item,
-    available: item.available !== false && (!Number.isInteger(item.dailyStock) || item.dailyStock > 0),
-    remainingStock: Number.isInteger(item.dailyStock) ? Math.max(0, item.dailyStock - orderedToday) : null
-  })));
+  const today = todayISTStr();
+  res.json(db.data.menu.map((item) => {
+    const remainingStock = Number.isInteger(item.dailyStock) ? Math.max(0, item.dailyStock - stockUsed(db.data, today, item.id)) : null;
+    return { ...item, available: item.available !== false && remainingStock !== 0, remainingStock };
+  }));
 });
 
 // GET /api/store-config - public kitchen and delivery rules
@@ -569,8 +637,8 @@ app.get('/api/subscriptions/me', async (req, res) => {
   if (!user) return res.status(401).json({ error: 'Not signed in.' });
 
   const result = db.data.subscriptions
-    .filter((s) => s.userId === user.id && s.approved)
-    .map((subscription) => ({ ...subscription, ...buildSubscriptionSchedule(subscription, db.data.holidays) }));
+    .filter((s) => s.userId === user.id && subscriptionInService(s, db.data))
+    .map((subscription) => ({ ...subscription, ...buildSubscriptionSchedule(subscription, subscriptionHolidays(db.data)) }));
 
   res.json(result);
 });
@@ -588,7 +656,7 @@ app.post('/api/subscriptions/:id/skip', async (req, res) => {
   if (!isValidDateString(date) || !['lunch', 'dinner'].includes(meal)) {
     return res.status(400).json({ error: 'Choose a valid date and meal to skip.' });
   }
-  const schedule = buildSubscriptionSchedule(subscription, db.data.holidays);
+  const schedule = buildSubscriptionSchedule(subscription, subscriptionHolidays(db.data));
   const scheduledMeal = schedule.schedule.find((entry) => entry.date === date && entry.meal === meal);
   if (!scheduledMeal || scheduledMeal.status !== 'upcoming') {
     return res.status(409).json({ error: 'That meal is not an upcoming delivery in this subscription.' });
@@ -600,7 +668,7 @@ app.post('/api/subscriptions/:id/skip', async (req, res) => {
   subscription.skippedMeals ||= [];
   subscription.skippedMeals.push({ date, meal, cancelledAt: new Date().toISOString() });
   await db.write();
-  res.json({ ...subscription, ...buildSubscriptionSchedule(subscription, db.data.holidays) });
+  res.json({ ...subscription, ...buildSubscriptionSchedule(subscription, subscriptionHolidays(db.data)) });
 });
 
 // GET /api/admin/subscriptions - list every user's Monthly subscriptions (requires admin key)
@@ -611,11 +679,13 @@ app.get('/api/admin/subscriptions', async (req, res) => {
   const db = await getDb();
   const usersById = new Map(db.data.users.map((u) => [u.id, u]));
   const result = db.data.subscriptions.map((subscription) => {
-    const schedule = buildSubscriptionSchedule(subscription, db.data.holidays);
+    const schedule = buildSubscriptionSchedule(subscription, subscriptionHolidays(db.data));
     const user = usersById.get(subscription.userId);
     return {
       ...subscription,
       ...schedule,
+      inService: subscriptionInService(subscription, db.data),
+      customisation: subscription.customisation || db.data.orders.find((order) => order.id === subscription.orderId)?.items.find((item) => item.name === subscription.itemName)?.customisation || '',
       customerName: user?.name || 'Unknown',
       customerPhone: user?.phone || ''
     };
@@ -642,6 +712,7 @@ app.post('/api/admin/subscriptions', async (req, res) => {
     userId: user.id,
     orderId: null,
     itemName: menuItem.name,
+    customisation: menuItem.customisations?.[0] || '',
     mealSlots: getSubscriptionMealSlots(menuItem.name),
     startDate,
     workingDaysRequired: getSettings(db.data).subscriptionWorkingDays,
@@ -654,7 +725,7 @@ app.post('/api/admin/subscriptions', async (req, res) => {
   await db.write();
   res.status(201).json({
     ...subscription,
-    ...buildSubscriptionSchedule(subscription, db.data.holidays),
+    ...buildSubscriptionSchedule(subscription, subscriptionHolidays(db.data)),
     customerName: user.name,
     customerPhone: user.phone
   });
@@ -685,7 +756,7 @@ app.patch('/api/admin/subscriptions/:id', async (req, res) => {
   }
   await db.write();
 
-  res.json({ ...subscription, ...buildSubscriptionSchedule(subscription, db.data.holidays) });
+  res.json({ ...subscription, ...buildSubscriptionSchedule(subscription, subscriptionHolidays(db.data)) });
 });
 
 // PATCH /api/admin/subscriptions/:id/approve - make a pending subscription visible to the user (requires admin key)
@@ -696,10 +767,23 @@ app.patch('/api/admin/subscriptions/:id/approve', async (req, res) => {
   const db = await getDb();
   const subscription = db.data.subscriptions.find((s) => s.id === req.params.id);
   if (!subscription) return res.status(404).json({ error: 'Subscription not found.' });
+  const order = db.data.orders.find((entry) => entry.id === subscription.orderId);
+  if (subscription.deactivated || (subscription.orderId && (!order || paymentStatus(order) !== 'verified' || ['cancelled', 'refund_requested', 'refunded'].includes(order.status)))) {
+    return res.status(409).json({ error: 'Verify payment for an active order before approving this subscription.' });
+  }
+  if (!subscription.approved) {
+    const today = todayISTStr();
+    const slots = getSubscriptionMealSlots(subscription.itemName);
+    const start = new Date(`${today}T00:00:00Z`);
+    if (slots.some((meal) => !canCancelSubscriptionMeal(today, meal))) start.setUTCDate(start.getUTCDate() + 1);
+    const earliestDate = start.toISOString().slice(0, 10);
+    if (subscription.startDate < earliestDate) subscription.startDate = earliestDate;
+    subscription.approvedAt = new Date().toISOString();
+  }
   subscription.approved = true;
   await db.write();
 
-  res.json({ ...subscription, ...buildSubscriptionSchedule(subscription, db.data.holidays) });
+  res.json({ ...subscription, ...buildSubscriptionSchedule(subscription, subscriptionHolidays(db.data)) });
 });
 
 // GET /api/admin/users - list all registered users (requires admin key)
@@ -708,7 +792,7 @@ app.get('/api/admin/users', async (req, res) => {
     return res.status(403).json({ error: 'Invalid admin key.' });
   }
   const db = await getDb();
-  res.json(db.data.users.map((u) => ({ id: u.id, name: u.name, phone: u.phone, address: u.address || '', createdAt: u.createdAt })));
+  res.json(db.data.users.map((user) => ({ ...publicUser(user), createdAt: user.createdAt })));
 });
 
 // DELETE /api/admin/users/:id - remove a registered user and their sessions/subscriptions (requires admin key)
@@ -785,6 +869,32 @@ app.patch('/api/admin/orders/:id/status', async (req, res) => {
   const db = await getDb();
   const order = db.data.orders.find((candidate) => candidate.id === Number(req.params.id));
   if (!order) return res.status(404).json({ error: 'Order not found.' });
+  const transitions = {
+    pending_payment: ['cancelled'],
+    payment_review: ['paid', 'cancelled'],
+    paid: ['preparing', 'cancelled', 'refund_requested'],
+    preparing: ['out_for_delivery', 'cancelled'],
+    out_for_delivery: ['delivered'],
+    delivered: ['refund_requested'],
+    cancelled: ['refund_requested'],
+    refund_requested: ['refunded'],
+    refunded: []
+  };
+  if (!(transitions[order.status] || []).includes(status)) return res.status(409).json({ error: 'Invalid order status transition.' });
+  if (['preparing', 'out_for_delivery', 'delivered', 'refund_requested', 'refunded'].includes(status) && paymentStatus(order) !== 'verified') {
+    return res.status(409).json({ error: 'Verified payment is required for this action.' });
+  }
+  if (['preparing', 'out_for_delivery', 'delivered'].includes(status) && order.items.every((item) => item.name.toLowerCase().startsWith('monthly'))) {
+    return res.status(409).json({ error: 'Monthly purchases use subscription approval, not delivery stages.' });
+  }
+  if (status === 'paid') {
+    order.paymentStatus = 'verified';
+    order.paymentVerifiedAt = new Date().toISOString();
+  }
+  if (['cancelled', 'refund_requested', 'refunded'].includes(status)) {
+    order.paymentStatus = paymentStatus(order);
+    deactivateSubscriptions(db.data, order);
+  }
   order.status = status;
   order.statusUpdatedAt = new Date().toISOString();
   if (status === 'refunded') order.refundedAt = order.statusUpdatedAt;
@@ -809,6 +919,9 @@ app.post('/api/orders', async (req, res) => {
   if (typeof customer.address !== 'string' || !customer.address.trim()) {
     return res.status(400).json({ error: 'Delivery address is required.' });
   }
+  if (!validDeliveryDetails(customer)) return res.status(400).json({ error: 'Enter a flat/door number and valid 6-digit pincode.' });
+  if ((customer.lat != null && (!Number.isFinite(customer.lat) || Math.abs(customer.lat) > 90)) ||
+      (customer.lng != null && (!Number.isFinite(customer.lng) || Math.abs(customer.lng) > 180))) return res.status(400).json({ error: 'Invalid delivery coordinates.' });
   const db = await getDb();
   const settings = getSettings(db.data);
   if (settings.orderingPaused) return res.status(409).json({ error: 'Ordering is temporarily paused.' });
@@ -823,13 +936,11 @@ app.post('/api/orders', async (req, res) => {
   if (!cutoffExempt && !mealService) {
     return res.status(409).json({ error: `Single Meal orders close at ${settings.dinnerCutoffTime} IST. Lunch cutoff is ${settings.lunchCutoffTime} IST.` });
   }
-  const todaysOrders = db.data.orders.filter((order) =>
-    new Date(new Date(order.createdAt).getTime() + 330 * 60 * 1000).toISOString().slice(0, 10) === today && !['cancelled', 'refunded'].includes(order.status)
-  );
-  const todaysQuantity = todaysOrders.reduce((sum, order) => sum + order.items.reduce((items, item) => items + item.quantity, 0), 0);
-  const requestedQuantity = items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
-  if (todaysQuantity + requestedQuantity > settings.dailyOrderCapacity) return res.status(409).json({ error: 'Kitchen capacity for today has been reached.' });
-  const stockOrders = todaysOrders;
+  const requestedMeals = items.filter((line) => {
+    const item = menuById.get(Number(line.id));
+    return item?.category === 'Pure Veg Meals' && !item.name.toLowerCase().startsWith('monthly');
+  }).reduce((total, line) => total + Number(line.quantity), 0);
+  if (requestedMeals > 0 && kitchenMealCount(db.data, today) + requestedMeals > settings.dailyOrderCapacity) return res.status(409).json({ error: 'Kitchen capacity for today has been reached.' });
 
   const user = await getUserFromToken(db, req);
   const requiresAccount = items.some((line) => {
@@ -853,9 +964,10 @@ app.post('/api/orders', async (req, res) => {
       return res.status(400).json({ error: 'Invalid item in cart.' });
     }
     if (menuItem.available === false) return res.status(409).json({ error: `${menuItem.name} is currently unavailable.` });
+    const requestedForItem = items.filter((item) => Number(item.id) === menuItem.id).reduce((total, item) => total + Number(item.quantity), 0);
+    if (menuItem.name.toLowerCase().startsWith('monthly') && requestedForItem !== 1) return res.status(400).json({ error: 'Order one subscription per monthly plan at a time.' });
     if (Number.isInteger(menuItem.dailyStock)) {
-      const alreadyOrdered = stockOrders.reduce((sum, order) => sum + order.items.filter((item) => item.id === menuItem.id).reduce((items, item) => items + item.quantity, 0), 0);
-      if (alreadyOrdered + quantity > menuItem.dailyStock) return res.status(409).json({ error: `${menuItem.name} has reached its daily stock limit.` });
+      if (stockUsed(db.data, today, menuItem.id) + requestedForItem > menuItem.dailyStock) return res.status(409).json({ error: `${menuItem.name} has reached its daily stock limit.` });
     }
     let customisation = '';
     let unitPrice = menuItem.price;
@@ -874,7 +986,7 @@ app.post('/api/orders', async (req, res) => {
     orderItems.push({ id: menuItem.id, name: menuItem.name, price: unitPrice, quantity, customisation });
   }
 
-  const orderId = Date.now();
+  const orderId = crypto.randomBytes(6).readUIntBE(0, 6);
   const accessToken = crypto.randomBytes(24).toString('hex');
   const now = new Date();
   const todayKey = now.toISOString().slice(0, 10);
@@ -893,10 +1005,13 @@ app.post('/api/orders', async (req, res) => {
       name: customer.name.trim(),
       phone: customer.phone.trim(),
       address: customer.address.trim(),
+      flatNumber: customer.flatNumber.trim(),
+      pincode: customer.pincode.trim(),
       lat: Number.isFinite(customer.lat) ? customer.lat : null,
       lng: Number.isFinite(customer.lng) ? customer.lng : null
     },
     status: 'pending_payment',
+    paymentStatus: 'unpaid',
     createdAt: new Date().toISOString()
   };
 
@@ -911,9 +1026,10 @@ app.post('/api/orders', async (req, res) => {
           userId: user.id,
           orderId: order.id,
           itemName: item.name,
+          customisation: item.customisation,
           mealSlots: getSubscriptionMealSlots(item.name),
           startDate,
-          workingDaysRequired: db.data.settings.subscriptionWorkingDays,
+          workingDaysRequired: settings.subscriptionWorkingDays,
           skippedMeals: [],
           approved: false,
           createdAt: new Date().toISOString()
@@ -937,7 +1053,9 @@ app.patch('/api/orders/:id/mark-paid', async (req, res) => {
   const user = await getUserFromToken(db, req);
   if (!canAccessOrder(order, user, req)) return res.status(403).json({ error: 'You cannot update this order.' });
   if (order.status !== 'pending_payment') return res.status(409).json({ error: 'This order is no longer awaiting payment.' });
-  order.status = 'paid';
+  if (!reservesStock(order)) return res.status(409).json({ error: 'This unpaid order has expired. Please place a new order.' });
+  order.status = 'payment_review';
+  order.paymentStatus = 'awaiting_verification';
   order.paymentSubmittedAt = new Date().toISOString();
   await db.write();
   const { accessToken, ...safeOrder } = order;
@@ -960,7 +1078,7 @@ app.get('/api/orders/:id', async (req, res) => {
   const user = await getUserFromToken(db, req);
   if (!canAccessOrder(order, user, req)) return res.status(403).json({ error: 'You cannot access this order.' });
   const { accessToken, ...safeOrder } = order;
-  res.json(safeOrder);
+  res.json({ ...safeOrder, upiUri: `upi://pay?pa=${encodeURIComponent(UPI_ID)}&pn=${encodeURIComponent(MERCHANT_NAME)}&am=${order.total}&cu=INR&tn=${encodeURIComponent('Order ' + order.id)}` });
 });
 
 // PATCH /api/orders/:id/cancel - customer cancellation before fulfillment
@@ -970,8 +1088,10 @@ app.patch('/api/orders/:id/cancel', async (req, res) => {
   const user = await getUserFromToken(db, req);
   if (!order) return res.status(404).json({ error: 'Order not found.' });
   if (!canAccessOrder(order, user, req)) return res.status(403).json({ error: 'You cannot update this order.' });
-  if (!['pending_payment', 'paid'].includes(order.status)) return res.status(409).json({ error: 'This order can no longer be cancelled.' });
+  if (!['pending_payment', 'payment_review', 'paid'].includes(order.status)) return res.status(409).json({ error: 'This order can no longer be cancelled.' });
+  order.paymentStatus = paymentStatus(order);
   order.status = 'cancelled';
+  deactivateSubscriptions(db.data, order);
   order.cancelledAt = new Date().toISOString();
   await db.write();
   const { accessToken, ...safeOrder } = order;
@@ -985,8 +1105,10 @@ app.post('/api/orders/:id/refund-request', async (req, res) => {
   const user = await getUserFromToken(db, req);
   if (!order) return res.status(404).json({ error: 'Order not found.' });
   if (!canAccessOrder(order, user, req)) return res.status(403).json({ error: 'You cannot update this order.' });
-  if (!['paid', 'cancelled'].includes(order.status)) return res.status(409).json({ error: 'This order is not eligible for a refund request.' });
+  if (paymentStatus(order) !== 'verified' || !['paid', 'cancelled', 'delivered'].includes(order.status)) return res.status(409).json({ error: 'This order is not eligible for a refund request.' });
+  order.paymentStatus = 'verified';
   order.status = 'refund_requested';
+  deactivateSubscriptions(db.data, order);
   order.refundRequestedAt = new Date().toISOString();
   await db.write();
   const { accessToken, ...safeOrder } = order;
@@ -1000,7 +1122,7 @@ app.get('/api/orders/:id/invoice', async (req, res) => {
   if (!order) return res.status(404).json({ error: 'Order not found.' });
   const user = await getUserFromToken(db, req);
   if (!canAccessOrder(order, user, req)) return res.status(403).json({ error: 'You cannot access this invoice.' });
-  if (order.status === 'pending_payment') return res.status(409).json({ error: 'Invoice is available after payment confirmation.' });
+  if (paymentStatus(order) !== 'verified') return res.status(409).json({ error: 'Invoice is available after admin payment verification.' });
 
   const items = order.items.map((item) => ({ ...item, lineTotal: item.price * item.quantity }));
 
@@ -1016,6 +1138,11 @@ app.get('/api/orders/:id/invoice', async (req, res) => {
     items,
     total: order.total
   });
+});
+
+app.use((error, req, res, next) => {
+  if (res.headersSent) return next(error);
+  res.status(error.status || 500).json({ error: error.status ? error.message : 'The request could not be completed. Please try again.' });
 });
 
 app.listen(PORT, () => {

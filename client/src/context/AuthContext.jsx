@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState } from 'react';
-import { registerUser, loginUser, getCurrentUser } from '../api';
+import { registerUser, loginUser, getCurrentUser, logoutUser } from '../api';
 
 const AuthContext = createContext(null);
 const STORAGE_KEY = 'houseOfShrishAuth';
@@ -15,7 +15,15 @@ export function AuthProvider({ children }) {
       setReady(true);
       return;
     }
-    const { token: savedToken } = JSON.parse(saved);
+    let savedToken;
+    try {
+      savedToken = JSON.parse(saved).token;
+      if (typeof savedToken !== 'string' || !savedToken) throw new Error('Invalid saved session.');
+    } catch {
+      localStorage.removeItem(STORAGE_KEY);
+      setReady(true);
+      return;
+    }
     getCurrentUser(savedToken)
       .then(({ user: savedUser }) => {
         setUser(savedUser);
@@ -41,7 +49,13 @@ export function AuthProvider({ children }) {
     persist(loggedInUser, newToken);
   }
 
-  function logout() {
+  async function logout() {
+    try {
+      if (token) await logoutUser(token);
+    } catch {
+      alert('Logout could not be confirmed by the server. Please try again.');
+      return;
+    }
     setUser(null);
     setToken(null);
     localStorage.removeItem(STORAGE_KEY);

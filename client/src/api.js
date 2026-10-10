@@ -65,6 +65,9 @@ export const updateProfile = (payload, token) =>
 export const getCurrentUser = (token) =>
   request('/api/auth/me', { headers: authHeaders(token) });
 
+export const logoutUser = (token) =>
+  request('/api/auth/logout', { method: 'POST', headers: authHeaders(token) });
+
 export const getHolidays = () => request('/api/holidays');
 
 export const addHoliday = (payload, adminKey) =>

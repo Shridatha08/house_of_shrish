@@ -50,6 +50,7 @@ export default function Menu() {
   const [storeConfig, setStoreConfig] = useState({ announcement: '', orderingPaused: false });
   const [selectedCustomisation, setSelectedCustomisation] = useState({}); // { [menuItemId]: customisation }
   const [selectedPlanId, setSelectedPlanId] = useState(null);
+  const [clock, setClock] = useState(() => Date.now());
   const { items, addItem, decreaseItem, total, count, makeKey } = useCart();
 
   useEffect(() => {
@@ -58,7 +59,25 @@ export default function Menu() {
       .catch(() => setError('Could not load the menu. Is the server running?'))
       .finally(() => setLoading(false));
     getStoreConfig().then(setStoreConfig).catch(() => {});
+    const timer = setInterval(() => setClock(Date.now()), 30000);
+    return () => clearInterval(timer);
   }, []);
+
+  function availableService() {
+    const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(clock));
+    const current = `${parts.find((part) => part.type === 'hour').value}:${parts.find((part) => part.type === 'minute').value}`;
+    if (current < (storeConfig.lunchCutoffTime || '11:00')) return 'Lunch';
+    if (current < (storeConfig.dinnerCutoffTime || '18:30')) return 'Dinner';
+    return null;
+  }
+
+  function cannotAdd(item) {
+    const inCart = items.filter((entry) => entry.id === item.id).reduce((quantity, entry) => quantity + entry.quantity, 0);
+    return storeConfig.orderingPaused || item.available === false ||
+      (item.remainingStock != null && inCart >= item.remainingStock) ||
+      (item.name.toLowerCase() === 'single meal' && !availableService()) ||
+      (item.name.toLowerCase().startsWith('monthly') && inCart >= 1);
+  }
 
   function customisationFor(item) {
     if (!item.customisations?.length && !item.variants?.length) return undefined;
@@ -124,6 +143,7 @@ export default function Menu() {
                       <h3>{item.name}</h3>
                     </div>
                     <p className="menu-desc">{item.description}</p>
+                    {item.name.toLowerCase() === 'single meal' && <p className="status-text">{availableService() ? `Order for ${availableService()} · ${availableService() === 'Lunch' ? storeConfig.lunchCutoffTime || '11:00' : storeConfig.dinnerCutoffTime || '18:30'} IST cutoff` : 'Single Meal ordering is closed for today.'}</p>}
                     {item.variants?.length > 0 ? (
                       <p className="menu-price">₹{Math.min(...item.variants.map((variant) => variant.price))} - ₹{Math.max(...item.variants.map((variant) => variant.price))}</p>
                     ) : <p className="menu-price">₹{item.price}</p>}
@@ -140,12 +160,12 @@ export default function Menu() {
                   </div>
                   <div className="menu-card-actions">
                     {item.available === false ? <span className="status-text">Unavailable</span> : quantityOf(item) === 0 ? (
-                      <button className="btn-add" disabled={storeConfig.orderingPaused} onClick={() => addItem(item, customisationFor(item))}>Add</button>
+                      <button className="btn-add" disabled={cannotAdd(item)} onClick={() => addItem(item, customisationFor(item))}>Add</button>
                     ) : (
                       <div className="qty-control">
                         <button onClick={() => decreaseItem(makeKey(item.id, customisationFor(item)))}>−</button>
                         <span>{quantityOf(item)}</span>
-                        <button onClick={() => addItem(item, customisationFor(item))}>+</button>
+                        <button disabled={cannotAdd(item)} onClick={() => addItem(item, customisationFor(item))}>+</button>
                       </div>
                     )}
                   </div>
@@ -196,12 +216,12 @@ export default function Menu() {
                   </div>
                   <div className="menu-card-actions">
                     {selectedPlan.available === false ? <span className="status-text">Unavailable</span> : quantityOf(selectedPlan) === 0 ? (
-                      <button className="btn-add" disabled={storeConfig.orderingPaused} onClick={() => addItem(selectedPlan, customisationFor(selectedPlan))}>Add</button>
+                      <button className="btn-add" disabled={cannotAdd(selectedPlan)} onClick={() => addItem(selectedPlan, customisationFor(selectedPlan))}>Add</button>
                     ) : (
                       <div className="qty-control">
                         <button onClick={() => decreaseItem(makeKey(selectedPlan.id, customisationFor(selectedPlan)))}>−</button>
                         <span>{quantityOf(selectedPlan)}</span>
-                        <button onClick={() => addItem(selectedPlan, customisationFor(selectedPlan))}>+</button>
+                        <button disabled={cannotAdd(selectedPlan)} onClick={() => addItem(selectedPlan, customisationFor(selectedPlan))}>+</button>
                       </div>
                     )}
                   </div>

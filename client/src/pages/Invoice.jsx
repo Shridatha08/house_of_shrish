@@ -10,15 +10,20 @@ function formatDate(iso) {
 export default function Invoice() {
   const { id } = useParams();
   const location = useLocation();
-  const { token } = useAuth();
+  const { token, ready } = useAuth();
   const [invoice, setInvoice] = useState(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    getInvoice(id, token, location.state?.accessToken)
-      .then(setInvoice)
-      .catch((err) => setError(err.message));
-  }, [id, token, location.state]);
+    if (!ready) return;
+    let cancelled = false;
+    setError('');
+    setInvoice(null);
+    getInvoice(id, token, location.state?.accessToken || sessionStorage.getItem(`orderAccess:${id}`))
+      .then((result) => { if (!cancelled) setInvoice(result); })
+      .catch((err) => { if (!cancelled) setError(err.message); });
+    return () => { cancelled = true; };
+  }, [id, token, ready, location.state]);
 
   if (error) return <p className="status-text error">{error}</p>;
   if (!invoice) return <p className="status-text">Loading invoice…</p>;
@@ -44,7 +49,9 @@ export default function Invoice() {
 
         <div className="invoice-customer">
           <p><strong>Billed to:</strong> {invoice.customer.name}</p>
+          {invoice.customer.flatNumber && <p>Flat / Door: {invoice.customer.flatNumber}</p>}
           <p>{invoice.customer.address}</p>
+          {invoice.customer.pincode && <p>Pincode: {invoice.customer.pincode}</p>}
           <p>Phone: {invoice.customer.phone}</p>
         </div>
 

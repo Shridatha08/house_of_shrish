@@ -110,9 +110,9 @@ export default function AdminHolidays() {
           setDeliveryTimeSlots((s.deliveryTimeSlots || []).join(','));
         })
         .catch(() => {});
-      getAdminSubscriptions(adminKey).then(setSubscriptions).catch(() => setSubscriptions([]));
+      getAdminSubscriptions(adminKey).then(setSubscriptions).catch((err) => setSubsError(err.message));
       getAdminUsers(adminKey).then(setUsers).catch(() => setUsers([]));
-      getAdminOrders(adminKey).then(setOrders).catch(() => setOrders([]));
+      getAdminOrders(adminKey).then(setOrders).catch((err) => setOrdersError(err.message));
       getMenu().then(setMenuItems).catch(() => setMenuItems([]));
       getAdminPasswordResetRequests(adminKey).then(setPasswordResetRequests).catch(() => setPasswordResetRequests([]));
     }
@@ -276,7 +276,9 @@ export default function AdminHolidays() {
     setSubsError('');
     setRefreshingSubscriptionOrders(true);
     try {
-      setSubscriptions(await getAdminSubscriptions(adminKey));
+      const [nextSubscriptions, nextOrders] = await Promise.all([getAdminSubscriptions(adminKey), getAdminOrders(adminKey)]);
+      setSubscriptions(nextSubscriptions);
+      setOrders(nextOrders);
     } catch (err) {
       setSubsError(err.message);
     } finally {
@@ -284,7 +286,7 @@ export default function AdminHolidays() {
     }
   }
 
-  const dailySubscriptionMeals = subscriptions.filter((subscription) => subscription.approved)
+  const dailySubscriptionMeals = subscriptions.filter((subscription) => subscription.inService ?? subscription.approved)
     .flatMap((subscription) => (subscription.schedule || [])
       .filter((entry) => entry.date === subscriptionOrderDate)
       .map((entry) => ({
@@ -292,12 +294,23 @@ export default function AdminHolidays() {
         subscriptionId: subscription.id,
         customerName: subscription.customerName,
         customerPhone: subscription.customerPhone,
-        address: users.find((user) => user.id === subscription.userId)?.address || '',
-        packageName: subscription.itemName
+        address: (() => {
+          const customer = orders.find((order) => order.id === subscription.orderId)?.customer || users.find((user) => user.id === subscription.userId);
+          return customer ? [customer.flatNumber, customer.address, customer.pincode].filter(Boolean).join(', ') : '';
+        })(),
+        packageName: subscription.itemName,
+        customisation: subscription.customisation
       })));
   const preparationMeals = dailySubscriptionMeals.filter((entry) => entry.status !== 'skipped');
   const lunchCount = preparationMeals.filter((entry) => entry.meal === 'lunch').length;
   const dinnerCount = preparationMeals.filter((entry) => entry.meal === 'dinner').length;
+  const normalPreparationMeals = orders.filter((order) =>
+    order.scheduledDate === subscriptionOrderDate && ['paid', 'preparing', 'out_for_delivery'].includes(order.status)
+  ).flatMap((order) => order.items.filter((item) => item.name.toLowerCase() === 'single meal').map((item) => ({
+    ...item, meal: order.mealService || order.timeSlot, orderId: order.id, customer: order.customer
+  })));
+  const singleLunchCount = normalPreparationMeals.filter((item) => item.meal === 'lunch').reduce((total, item) => total + item.quantity, 0);
+  const singleDinnerCount = normalPreparationMeals.filter((item) => item.meal === 'dinner').reduce((total, item) => total + item.quantity, 0);
 
   async function handleOrderStatus(order, status) {
     setOrdersError('');
@@ -305,6 +318,7 @@ export default function AdminHolidays() {
     try {
       const updated = await updateAdminOrderStatus(order.id, status, adminKey);
       setOrders((prev) => prev.map((item) => item.id === updated.id ? updated : item));
+      setSubscriptions(await getAdminSubscriptions(adminKey));
     } catch (err) {
       setOrdersError(err.message);
     } finally {
@@ -458,9 +472,10 @@ export default function AdminHolidays() {
                 </span>
               </div>
               <p className="subscription-item-name">{sub.itemName}</p>
+              {sub.deactivated && <p className="status-text">Subscription deactivated after cancellation or refund.</p>}
               {sub.approved && <p className="subscription-summary-dates">{sub.daysRemaining} delivery days · {sub.remainingMeals} meals remaining · Ends {sub.endDate || '—'}</p>}
 
-              {!sub.approved && (
+              {!sub.approved && !sub.deactivated && (
                 <button
                   type="button"
                   className="btn-primary"
@@ -570,6 +585,13 @@ export default function AdminHolidays() {
         </section>
       ))}
       <h2 style={{ marginTop: 32 }}>Purchase Orders</h2>
+      <h3>Kitchen Preparation Totals</h3>
+      <p className="status-text">Service date: {subscriptionOrderDate}</p>
+      <dl className="subscription-preparation-totals">
+        <div><dt>Total lunch</dt><dd>{lunchCount + singleLunchCount}</dd></div>
+        <div><dt>Total dinner</dt><dd>{dinnerCount + singleDinnerCount}</dd></div>
+      </dl>
+      <p className="status-text">Single Meal: lunch {singleLunchCount}, dinner {singleDinnerCount}. Subscription: lunch {lunchCount}, dinner {dinnerCount}.</p>
       {ordersError && <p className="status-text error">{ordersError}</p>}
       {orders.length === 0 ? (
         <p className="status-text">No orders yet.</p>
@@ -589,7 +611,7 @@ export default function AdminHolidays() {
                 <strong>#{order.orderNumber || order.id}</strong>
                 <span>{order.customer.name} · {order.customer.phone}</span>
                 <span className={`subscription-badge ${subscriptionOnly && !subscriptionApproved ? 'pending' : 'active'}`}>
-                  {subscriptionOnly ? approvalLabel : order.status.replaceAll('_', ' ')}
+                  {subscriptionOnly && !['cancelled', 'refund_requested', 'refunded'].includes(order.status) ? approvalLabel : order.status.replaceAll('_', ' ')}
                 </span>
               </div>
               <p className="subscription-item-name">{order.items.map((item) => `${item.name} × ${item.quantity}`).join(', ')}</p>
@@ -598,7 +620,11 @@ export default function AdminHolidays() {
                 ₹{order.total}{!subscriptionOnly && ` · Delivery: ${order.scheduledDate ? `${order.scheduledDate} · ${order.timeSlot}` : 'No scheduled delivery'}`}
               </p>
               <p className="subscription-summary-dates">{order.customer.address}</p>
+              <p className="subscription-summary-dates">Flat / Door: {order.customer.flatNumber || 'Not provided'} · Pincode: {order.customer.pincode || 'Not provided'}</p>
+              <p className="subscription-summary-dates">Payment: {order.paymentStatus || order.status.replaceAll('_', ' ')}</p>
               <div className="order-actions">
+                {order.status === 'payment_review' && <button type="button" className="btn-add" onClick={() => handleOrderStatus(order, 'paid')} disabled={updatingOrderId === order.id}>Verify payment</button>}
+                {['pending_payment', 'payment_review', 'paid', 'preparing'].includes(order.status) && <button type="button" className="btn-add" onClick={() => handleOrderStatus(order, 'cancelled')} disabled={updatingOrderId === order.id}>Cancel order</button>}
                 {!subscriptionOnly && ['paid', 'preparing'].includes(order.status) && <button type="button" className="btn-add" onClick={() => handleOrderStatus(order, 'preparing')} disabled={updatingOrderId === order.id}>Preparing</button>}
                 {!subscriptionOnly && ['preparing'].includes(order.status) && <button type="button" className="btn-add" onClick={() => handleOrderStatus(order, 'out_for_delivery')} disabled={updatingOrderId === order.id}>Out for delivery</button>}
                 {!subscriptionOnly && ['out_for_delivery'].includes(order.status) && <button type="button" className="btn-add" onClick={() => handleOrderStatus(order, 'delivered')} disabled={updatingOrderId === order.id}>Delivered</button>}

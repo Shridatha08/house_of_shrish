@@ -9,6 +9,8 @@ export default function Profile() {
   const [name, setName] = useState(user?.name || '');
   const [phone, setPhone] = useState(user?.phone || '');
   const [address, setAddress] = useState(user?.address || '');
+  const [flatNumber, setFlatNumber] = useState(user?.flatNumber || '');
+  const [pincode, setPincode] = useState(user?.pincode || '');
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -20,13 +22,32 @@ export default function Profile() {
   const [calendarMonth, setCalendarMonth] = useState(() => new Date());
   const [skipError, setSkipError] = useState('');
   const [skippingMealKey, setSkippingMealKey] = useState('');
+  const [subscriptionsError, setSubscriptionsError] = useState('');
+  const [loadingHistory, setLoadingHistory] = useState(true);
+  const [historyRefresh, setHistoryRefresh] = useState(0);
+
+  useEffect(() => {
+    if (!user) return;
+    setName(user.name);
+    setPhone(user.phone);
+    setAddress(user.address || '');
+    setFlatNumber(user.flatNumber || '');
+    setPincode(user.pincode || '');
+  }, [user]);
 
   useEffect(() => {
     if (user) {
-      getMySubscriptions(token).then(setSubscriptions).catch(() => setSubscriptions([]));
-      getMyOrders(token).then(setOrders).catch(() => setOrders([]));
+      let cancelled = false;
+      setLoadingHistory(true);
+      setSubscriptionsError('');
+      setOrderError('');
+      Promise.all([
+        getMySubscriptions(token).then((data) => { if (!cancelled) setSubscriptions(data); }).catch((err) => { if (!cancelled) setSubscriptionsError(err.message); }),
+        getMyOrders(token).then((data) => { if (!cancelled) setOrders(data); }).catch((err) => { if (!cancelled) setOrderError(err.message); })
+      ]).finally(() => { if (!cancelled) setLoadingHistory(false); });
+      return () => { cancelled = true; };
     }
-  }, [user, token]);
+  }, [user, token, historyRefresh]);
 
   async function handleCancelOrder(order) {
     setOrderError('');
@@ -34,6 +55,7 @@ export default function Profile() {
     try {
       const updated = await cancelOrder(order.id, token);
       setOrders((prev) => prev.map((item) => item.id === updated.id ? updated : item));
+      setSubscriptions(await getMySubscriptions(token));
     } catch (err) {
       setOrderError(err.message);
     } finally {
@@ -47,6 +69,7 @@ export default function Profile() {
     try {
       const updated = await requestRefund(order.id, token);
       setOrders((prev) => prev.map((item) => item.id === updated.id ? updated : item));
+      setSubscriptions(await getMySubscriptions(token));
     } catch (err) {
       setOrderError(err.message);
     } finally {
@@ -104,6 +127,7 @@ export default function Profile() {
   if (ready && !user) {
     return <Navigate to="/login?redirect=/profile" replace />;
   }
+  if (!ready) return <p className="status-text">Loading profile...</p>;
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -111,7 +135,7 @@ export default function Profile() {
     setSaved(false);
     setSubmitting(true);
     try {
-      const { user: updated } = await updateProfile({ name, phone, address }, token);
+      const { user: updated } = await updateProfile({ name, phone, address, flatNumber, pincode }, token);
       updateUser(updated);
       setSaved(true);
     } catch (err) {
@@ -142,8 +166,16 @@ export default function Profile() {
             />
           </label>
           <label>
+            Flat / door number
+            <input value={flatNumber} onChange={(event) => setFlatNumber(event.target.value)} maxLength={100} required />
+          </label>
+          <label>
             Delivery address
             <textarea value={address} onChange={(e) => setAddress(e.target.value)} rows={3} required />
+          </label>
+          <label>
+            Pincode
+            <input value={pincode} onChange={(event) => setPincode(event.target.value)} inputMode="numeric" pattern="[1-9][0-9]{5}" maxLength={6} autoComplete="postal-code" required />
           </label>
 
           {error && <p className="status-text error">{error}</p>}
@@ -154,6 +186,7 @@ export default function Profile() {
           </button>
         </form>
 
+        {subscriptionsError && <p className="status-text error">Subscriptions: {subscriptionsError}</p>}
         {subscriptions.length > 0 && (
           <div className="profile-subscriptions">
             <h2>My Monthly Subscriptions</h2>
@@ -241,8 +274,9 @@ export default function Profile() {
 
         <div className="profile-subscriptions">
           <h2>My Orders</h2>
+          <button type="button" className="btn-add" disabled={loadingHistory} onClick={() => setHistoryRefresh((value) => value + 1)}>Refresh orders and subscriptions</button>
           {orderError && <p className="status-text error">{orderError}</p>}
-          {orders.length === 0 ? <p className="status-text">No orders yet.</p> : orders.map((order) => (
+          {loadingHistory ? <p className="status-text">Loading orders...</p> : orders.length === 0 && !orderError ? <p className="status-text">No orders yet.</p> : orders.map((order) => (
             <div key={order.id} className="subscription-summary-card">
               <div className="subscription-summary-header">
                 <strong>#{order.orderNumber || order.id}</strong>
@@ -254,11 +288,12 @@ export default function Profile() {
               <p className="subscription-summary-dates">Payment / delivery status: {order.status.replaceAll('_', ' ')}</p>
               <p className="subscription-summary-dates">{order.items.map((item) => `${item.name} × ${item.quantity}`).join(', ')}</p>
               <div className="order-actions">
-                {order.status !== 'pending_payment' && <Link to={`/invoice/${order.id}`} className="btn-link">View invoice</Link>}
-                {['pending_payment', 'paid'].includes(order.status) && (
+                {order.status === 'pending_payment' && <Link to={`/payment/${order.id}`} className="btn-link">Continue payment</Link>}
+                {(order.paymentStatus === 'verified' || (!order.paymentStatus && ['paid', 'preparing', 'out_for_delivery', 'delivered', 'refunded'].includes(order.status))) && <Link to={`/invoice/${order.id}`} className="btn-link">View invoice</Link>}
+                {['pending_payment', 'payment_review', 'paid'].includes(order.status) && (
                   <button type="button" className="btn-add" onClick={() => handleCancelOrder(order)} disabled={updatingOrderId === order.id}>Cancel order</button>
                 )}
-                {['paid', 'cancelled'].includes(order.status) && (
+                {['paid', 'cancelled', 'delivered'].includes(order.status) && (order.paymentStatus === 'verified' || (!order.paymentStatus && ['paid', 'delivered'].includes(order.status))) && (
                   <button type="button" className="btn-add" onClick={() => handleRefundRequest(order)} disabled={updatingOrderId === order.id}>Request refund</button>
                 )}
               </div>

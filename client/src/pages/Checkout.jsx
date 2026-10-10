@@ -21,6 +21,8 @@ export default function Checkout() {
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [address, setAddress] = useState('');
+  const [flatNumber, setFlatNumber] = useState('');
+  const [pincode, setPincode] = useState('');
   const [position, setPosition] = useState(null);
   const [subscriptionStartDate, setSubscriptionStartDate] = useState(todayIST);
   const [error, setError] = useState('');
@@ -35,6 +37,8 @@ export default function Checkout() {
       setName(user.name);
       setPhone(user.phone);
       setAddress(user.address || '');
+      setFlatNumber(user.flatNumber || '');
+      setPincode(user.pincode || '');
     }
   }, [user]);
 
@@ -80,6 +84,8 @@ export default function Checkout() {
             name,
             phone,
             address,
+            flatNumber,
+            pincode,
             lat: position?.lat ?? null,
             lng: position?.lng ?? null
           },
@@ -87,6 +93,7 @@ export default function Checkout() {
         },
         token
       );
+      sessionStorage.setItem(`orderAccess:${order.id}`, accessToken);
       navigate(`/payment/${order.id}`, { state: { order, upiUri, accessToken } });
     } catch (err) {
       setError(err.message);
@@ -148,8 +155,16 @@ export default function Checkout() {
           />
         </label>
         <label>
+          Flat / door number
+          <input value={flatNumber} onChange={(event) => setFlatNumber(event.target.value)} maxLength={100} required />
+        </label>
+        <label>
           Delivery address
           <textarea value={address} onChange={(e) => setAddress(e.target.value)} rows={3} required />
+        </label>
+        <label>
+          Pincode
+          <input value={pincode} onChange={(event) => setPincode(event.target.value)} inputMode="numeric" pattern="[1-9][0-9]{5}" maxLength={6} autoComplete="postal-code" required />
         </label>
         {requiresAccount && (
           <label>

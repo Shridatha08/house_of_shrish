@@ -50,6 +50,8 @@
 }
 
 .app-main {
+  width: 100%;
+  box-sizing: border-box;
   max-width: 900px;
   margin: 0 auto;
   padding: 20px 16px 100px;
@@ -514,6 +516,8 @@
 }
 
 .profile-card {
+  min-width: 0;
+  box-sizing: border-box;
   max-width: 860px;
 }
 
@@ -877,6 +881,10 @@
   margin: 0;
 }
 
+.subscription-calendar-heading {
+  flex-wrap: wrap;
+}
+
 .calendar-month-controls strong {
   min-width: 125px;
   text-align: center;
@@ -966,7 +974,7 @@
   overflow-wrap: anywhere;
 }
 
-.subscription-calendar-event.completed {
+.subscription-calendar-event.elapsed {
   color: #888;
 }
 
