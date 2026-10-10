@@ -548,3 +548,30 @@ test('guest orders notify the device bound to that order', async () => {
   assert.equal(update.userId, null, 'a guest order carries no account');
   assert.equal(update.title, 'Payment confirmed');
 });
+
+test('delivery coordinates are optional, validated, and preserved', async () => {
+  const app = application();
+  const account = { name: 'Geo', phone: '9123456780', password: 'secret1', address: 'Street', flatNumber: 'B-2', pincode: '560075' };
+
+  assert.equal((await app.request('post', '/api/auth/register', { ...account, lat: 200, lng: 77 })).code, 400);
+
+  const created = await app.request('post', '/api/auth/register', { ...account, lat: 12.97, lng: 77.59 });
+  assert.equal(created.code, 201);
+  assert.equal(created.body.user.lat, 12.97);
+  assert.equal(created.body.user.lng, 77.59);
+
+  // Registering without a pin is still allowed.
+  const plain = await app.request('post', '/api/auth/register', { ...account, phone: '9123456781' });
+  assert.equal(plain.code, 201);
+  assert.equal(plain.body.user.lat, null);
+
+  const token = created.body.token;
+  const headers = { authorization: `Bearer ${token}` };
+  const moved = await app.request('patch', '/api/auth/profile', { ...account, lat: 13.1, lng: 77.7 }, {}, headers);
+  assert.equal(moved.body.user.lat, 13.1);
+
+  // A profile save that omits coordinates must not wipe the saved pin.
+  const kept = await app.request('patch', '/api/auth/profile', account, {}, headers);
+  assert.equal(kept.body.user.lat, 13.1);
+  assert.equal(kept.body.user.lng, 77.7);
+});

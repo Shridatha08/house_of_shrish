@@ -83,7 +83,29 @@ async function getUserFromToken(db, req) {
 }
 
 function publicUser(user) {
-  return { id: user.id, name: user.name, phone: user.phone, address: user.address || '', flatNumber: user.flatNumber || '', pincode: user.pincode || '' };
+  return {
+    id: user.id,
+    name: user.name,
+    phone: user.phone,
+    address: user.address || '',
+    flatNumber: user.flatNumber || '',
+    pincode: user.pincode || '',
+    lat: typeof user.lat === 'number' ? user.lat : null,
+    lng: typeof user.lng === 'number' ? user.lng : null
+  };
+}
+
+// Coordinates are optional everywhere; absent is valid, malformed is not.
+function readCoordinates(source) {
+  const lat = source?.lat;
+  const lng = source?.lng;
+  if (lat === undefined || lat === null || lng === undefined || lng === null) {
+    return { ok: true, lat: null, lng: null };
+  }
+  if (!Number.isFinite(lat) || Math.abs(lat) > 90 || !Number.isFinite(lng) || Math.abs(lng) > 180) {
+    return { ok: false };
+  }
+  return { ok: true, lat, lng };
 }
 
 function validDeliveryDetails(details) {
@@ -389,6 +411,8 @@ app.post('/api/auth/register', authRateLimit, async (req, res) => {
   }
 
   if (!validDeliveryDetails({ flatNumber, pincode })) return res.status(400).json({ error: 'Enter a flat/door number and valid 6-digit pincode.' });
+  const coordinates = readCoordinates(req.body);
+  if (!coordinates.ok) return res.status(400).json({ error: 'Invalid delivery coordinates.' });
   const db = await getDb();
   if (db.data.users.some((u) => u.phone === phone.trim())) {
     return res.status(409).json({ error: 'An account with this phone number already exists.' });
@@ -402,6 +426,8 @@ app.post('/api/auth/register', authRateLimit, async (req, res) => {
     address: address.trim(),
     flatNumber: flatNumber.trim(),
     pincode: pincode.trim(),
+    lat: coordinates.lat,
+    lng: coordinates.lng,
     passwordHash,
     createdAt: new Date().toISOString()
   };
@@ -595,12 +621,19 @@ app.patch('/api/auth/profile', async (req, res) => {
     return res.status(409).json({ error: 'Another account already uses this phone number.' });
   }
   if (!validDeliveryDetails({ flatNumber, pincode })) return res.status(400).json({ error: 'Enter a flat/door number and valid 6-digit pincode.' });
+  const coordinates = readCoordinates(req.body);
+  if (!coordinates.ok) return res.status(400).json({ error: 'Invalid delivery coordinates.' });
 
   user.name = name.trim();
   user.phone = phone.trim();
   user.address = address.trim();
   user.flatNumber = flatNumber.trim();
   user.pincode = pincode.trim();
+  // Omitting coordinates leaves any previously saved pin untouched.
+  if (coordinates.lat !== null) {
+    user.lat = coordinates.lat;
+    user.lng = coordinates.lng;
+  }
   await db.write();
 
   res.json({ user: publicUser(user) });
