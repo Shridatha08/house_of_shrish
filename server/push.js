@@ -38,10 +38,8 @@ export function pushEnabled() {
   return Boolean(getMessaging());
 }
 
-function tokensFor(data, { userId = null, admin = false }) {
-  return (data.deviceTokens || [])
-    .filter((entry) => (admin ? entry.isAdmin : entry.userId === userId))
-    .map((entry) => entry.token);
+function tokensFor(data, predicate) {
+  return (data.deviceTokens || []).filter(predicate).map((entry) => entry.token);
 }
 
 /**
@@ -81,18 +79,31 @@ async function send(db, tokens, { title, body, data = {} }) {
 }
 
 export async function notifyAdmins(db, message) {
-  await send(db, tokensFor(db.data, { admin: true }), { ...message, data: { ...message.data, channel: 'admin' } });
+  const tokens = tokensFor(db.data, (entry) => entry.isAdmin);
+  await send(db, tokens, { ...message, data: { ...message.data, channel: 'admin' } });
 }
 
 export async function notifyUser(db, userId, message) {
-  await send(db, tokensFor(db.data, { userId }), { ...message, data: { ...message.data, channel: 'orders' } });
+  if (userId === null || userId === undefined) return;
+  const tokens = tokensFor(db.data, (entry) => entry.userId === userId);
+  await send(db, tokens, { ...message, data: { ...message.data, channel: 'orders' } });
 }
 
-export function registerDeviceToken(data, { token, userId = null, isAdmin = false, platform = 'android' }) {
+/// Reaches the account that placed the order plus any guest device that
+/// registered against it.
+export async function notifyOrder(db, order, message) {
+  const tokens = tokensFor(db.data, (entry) =>
+    (order.userId !== null && order.userId !== undefined && entry.userId === order.userId) ||
+    (entry.orderId !== null && entry.orderId !== undefined && entry.orderId === order.id)
+  );
+  await send(db, tokens, { ...message, data: { ...message.data, channel: 'orders' } });
+}
+
+export function registerDeviceToken(data, { token, userId = null, orderId = null, isAdmin = false, platform = 'android' }) {
   data.deviceTokens ||= [];
   // A device can switch accounts, so the token (not the user) is the identity.
   const existing = data.deviceTokens.find((entry) => entry.token === token);
-  const record = { token, userId, isAdmin, platform, updatedAt: new Date().toISOString() };
+  const record = { token, userId, orderId, isAdmin, platform, updatedAt: new Date().toISOString() };
   if (existing) Object.assign(existing, record);
   else data.deviceTokens.push(record);
 }

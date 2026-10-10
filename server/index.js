@@ -4,7 +4,7 @@ import cors from 'cors';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import { getDb } from './db.js';
-import { notifyAdmins, notifyUser, registerDeviceToken, removeDeviceToken } from './push.js';
+import { notifyAdmins, notifyOrder, notifyUser, registerDeviceToken, removeDeviceToken } from './push.js';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -524,13 +524,28 @@ app.post('/api/auth/logout', async (req, res) => {
 app.post('/api/device-token', async (req, res) => {
   const db = await getDb();
   const user = await getUserFromToken(db, req);
-  if (!user) return res.status(401).json({ error: 'Not signed in.' });
 
-  const { token, platform } = req.body || {};
+  const { token, platform, orderId } = req.body || {};
   if (typeof token !== 'string' || token.trim().length < 20 || token.length > 4096) {
     return res.status(400).json({ error: 'A valid device token is required.' });
   }
-  registerDeviceToken(db.data, { token: token.trim(), userId: user.id, platform });
+
+  // Guests have no account, so they prove ownership with the order's access token.
+  let boundOrderId = null;
+  if (!user) {
+    const order = db.data.orders.find((entry) => entry.id === Number(orderId));
+    if (!order || !order.accessToken || order.accessToken !== getOrderToken(req)) {
+      return res.status(401).json({ error: 'Not signed in.' });
+    }
+    boundOrderId = order.id;
+  }
+
+  registerDeviceToken(db.data, {
+    token: token.trim(),
+    userId: user?.id ?? null,
+    orderId: boundOrderId,
+    platform
+  });
   await db.write();
   res.status(204).end();
 });
@@ -1025,21 +1040,19 @@ app.patch('/api/admin/orders/:id/status', async (req, res) => {
   if (status === 'refunded') order.refundedAt = order.statusUpdatedAt;
   await db.write();
 
-  if (order.userId) {
-    const announcements = {
-      paid: ['Payment confirmed', `We have verified your payment for order #${order.orderNumber}.`],
-      preparing: ['Order being prepared', `Order #${order.orderNumber} is now being prepared.`],
-      out_for_delivery: ['Out for delivery', `Order #${order.orderNumber} is on its way.`],
-      delivered: ['Delivered', `Order #${order.orderNumber} has been delivered. Enjoy your meal!`]
-    };
-    const announcement = announcements[status];
-    if (announcement) {
-      await notifyUser(db, order.userId, {
-        title: announcement[0],
-        body: announcement[1],
-        data: { type: 'order_status', orderId: order.id, status }
-      });
-    }
+  const announcements = {
+    paid: ['Payment confirmed', `We have verified your payment for order #${order.orderNumber}.`],
+    preparing: ['Order being prepared', `Order #${order.orderNumber} is now being prepared.`],
+    out_for_delivery: ['Out for delivery', `Order #${order.orderNumber} is on its way.`],
+    delivered: ['Delivered', `Order #${order.orderNumber} has been delivered. Enjoy your meal!`]
+  };
+  const announcement = announcements[status];
+  if (announcement) {
+    await notifyOrder(db, order, {
+      title: announcement[0],
+      body: announcement[1],
+      data: { type: 'order_status', orderId: order.id, status }
+    });
   }
 
   const { accessToken, ...safeOrder } = order;

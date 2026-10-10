@@ -43,11 +43,12 @@ function application(data = fixture()) {
     // push.js is imported by index.js; the sandbox strips imports, so record instead of sending.
     notifyAdmins: async (db, message) => { notifications.push({ audience: 'admin', ...message }); },
     notifyUser: async (db, userId, message) => { notifications.push({ audience: 'user', userId, ...message }); },
+    notifyOrder: async (db, order, message) => { notifications.push({ audience: 'order', orderId: order.id, userId: order.userId ?? null, ...message }); },
     registerDeviceToken: (data, record) => {
       data.deviceTokens ||= [];
       const existing = data.deviceTokens.find((entry) => entry.token === record.token);
       if (existing) Object.assign(existing, record);
-      else data.deviceTokens.push({ userId: null, isAdmin: false, ...record });
+      else data.deviceTokens.push({ userId: null, orderId: null, isAdmin: false, ...record });
     },
     removeDeviceToken: (data, token) => {
       data.deviceTokens = (data.deviceTokens || []).filter((entry) => entry.token !== token);
@@ -488,7 +489,7 @@ test('customers are told about approval, verified payment and delivery stages', 
     titles.push(orders.notifications.at(-1).title);
   }
   assert.deepEqual(titles, ['Payment confirmed', 'Order being prepared', 'Out for delivery', 'Delivered']);
-  assert.ok(orders.notifications.slice(1).every((entry) => entry.audience === 'user'));
+  assert.ok(orders.notifications.slice(1).every((entry) => entry.audience === 'order'));
 });
 
 test('device tokens register per audience and can be removed', async () => {
@@ -512,4 +513,38 @@ test('device tokens register per audience and can be removed', async () => {
 
   await app.request('delete', '/api/device-token', { token });
   assert.deepEqual(app.state().deviceTokens.map((entry) => entry.token), [adminToken]);
+});
+
+test('guests can register a device only with their own order token', async () => {
+  const app = application();
+  const token = 'g'.repeat(40);
+  const placed = await app.request('post', '/api/orders', { items: [{ id: 1, quantity: 1, customisation: 'Meal A' }], customer }, {}, {});
+  const { order, accessToken } = placed.body;
+
+  // No session and no order token at all.
+  assert.equal((await app.request('post', '/api/device-token', { token, orderId: order.id }, {}, {})).code, 401);
+  // Correct order, wrong token.
+  assert.equal((await app.request('post', '/api/device-token', { token, orderId: order.id }, {}, { 'x-order-token': 'wrong' })).code, 401);
+  // Valid token but pointed at an order that does not exist.
+  assert.equal((await app.request('post', '/api/device-token', { token, orderId: 999 }, {}, { 'x-order-token': accessToken })).code, 401);
+
+  assert.equal((await app.request('post', '/api/device-token', { token, orderId: order.id }, {}, { 'x-order-token': accessToken })).code, 204);
+  const [entry] = app.state().deviceTokens;
+  assert.equal(entry.orderId, order.id);
+  assert.equal(entry.userId, null);
+});
+
+test('guest orders notify the device bound to that order', async () => {
+  const app = application();
+  const placed = await app.request('post', '/api/orders', { items: [{ id: 1, quantity: 1, customisation: 'Meal A' }], customer }, {}, {});
+  const { order, accessToken } = placed.body;
+  await app.request('post', '/api/device-token', { token: 'g'.repeat(40), orderId: order.id }, {}, { 'x-order-token': accessToken });
+  await app.request('patch', '/api/orders/:id/mark-paid', {}, { id: String(order.id) }, { 'x-order-token': accessToken });
+
+  await app.request('patch', '/api/admin/orders/:id/status', { status: 'paid' }, { id: String(order.id) }, { 'x-admin-key': 'test-admin' });
+  const update = app.notifications.at(-1);
+  assert.equal(update.audience, 'order');
+  assert.equal(update.orderId, order.id);
+  assert.equal(update.userId, null, 'a guest order carries no account');
+  assert.equal(update.title, 'Payment confirmed');
 });
