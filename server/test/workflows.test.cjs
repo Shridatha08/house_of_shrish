@@ -77,6 +77,20 @@ async function purchase(app, itemId = 1, extra = {}) {
 
 const adminHeaders = { 'x-admin-key': 'test-admin' };
 
+test('login distinguishes unregistered users and incorrect passwords', async () => {
+  const app = application();
+  const missing = await app.request('post', '/api/auth/login', { phone: '9111111111', password: 'password' });
+  assert.equal(missing.code, 401);
+  assert.equal(missing.body.error, 'User not registered. Please register first.');
+  const incorrect = await app.request('post', '/api/auth/login', { phone: customer.phone, password: 'wrong' });
+  assert.equal(incorrect.code, 401);
+  assert.equal(incorrect.body.error, 'Incorrect password. Please try again.');
+  assert.equal(app.state().sessions.length, 1);
+  const success = await app.request('post', '/api/auth/login', { phone: customer.phone, password: 'password' });
+  assert.equal(success.code, 200);
+  assert.ok(success.body.token);
+});
+
 test('registration and profile require, store, and return flat number and pincode', async () => {
   const app = application();
   const invalid = await app.request('post', '/api/auth/register', { ...customer, phone: '9111111111', pincode: '123', password: 'password' });

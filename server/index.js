@@ -423,8 +423,11 @@ app.post('/api/auth/login', authRateLimit, async (req, res) => {
 
   const db = await getDb();
   const user = db.data.users.find((u) => u.phone === phone.trim());
-  if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
-    return res.status(401).json({ error: 'Invalid phone number or password.' });
+  if (!user) {
+    return res.status(401).json({ error: 'User not registered. Please register first.' });
+  }
+  if (!(await bcrypt.compare(password, user.passwordHash))) {
+    return res.status(401).json({ error: 'Incorrect password. Please try again.' });
   }
 
   const token = crypto.randomBytes(24).toString('hex');
