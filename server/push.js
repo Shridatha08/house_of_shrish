@@ -38,6 +38,28 @@ export function pushEnabled() {
   return Boolean(getMessaging());
 }
 
+/// Reports whether sending is possible and, when it is not, why. Without this
+/// a bad credential is indistinguishable from "nobody has registered yet".
+export function pushDiagnostics(data) {
+  const ready = Boolean(getMessaging());
+  const tokens = data.deviceTokens || [];
+  return {
+    enabled: ready,
+    reason: ready ? null : (initError?.message || 'Unknown'),
+    credentialSource: process.env.FIREBASE_SERVICE_ACCOUNT
+      ? 'FIREBASE_SERVICE_ACCOUNT'
+      : process.env.GOOGLE_APPLICATION_CREDENTIALS
+        ? 'GOOGLE_APPLICATION_CREDENTIALS'
+        : null,
+    devices: {
+      total: tokens.length,
+      admin: tokens.filter((entry) => entry.isAdmin).length,
+      customers: tokens.filter((entry) => !entry.isAdmin && entry.userId !== null && entry.userId !== undefined).length,
+      guests: tokens.filter((entry) => !entry.isAdmin && (entry.userId === null || entry.userId === undefined)).length
+    }
+  };
+}
+
 function tokensFor(data, predicate) {
   return (data.deviceTokens || []).filter(predicate).map((entry) => entry.token);
 }

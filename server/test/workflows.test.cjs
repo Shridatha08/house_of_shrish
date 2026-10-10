@@ -50,6 +50,7 @@ function application(data = fixture()) {
       if (existing) Object.assign(existing, record);
       else data.deviceTokens.push({ userId: null, orderId: null, isAdmin: false, ...record });
     },
+    pushDiagnostics: (data) => ({ enabled: false, reason: 'test', devices: { total: (data.deviceTokens || []).length } }),
     removeDeviceToken: (data, token) => {
       data.deviceTokens = (data.deviceTokens || []).filter((entry) => entry.token !== token);
     },

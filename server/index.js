@@ -4,7 +4,7 @@ import cors from 'cors';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import { getDb } from './db.js';
-import { notifyAdmins, notifyOrder, notifyUser, registerDeviceToken, removeDeviceToken } from './push.js';
+import { notifyAdmins, notifyOrder, notifyUser, pushDiagnostics, registerDeviceToken, removeDeviceToken } from './push.js';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -599,6 +599,13 @@ app.post('/api/admin/device-token', async (req, res) => {
   registerDeviceToken(db.data, { token: token.trim(), isAdmin: true, platform });
   await db.write();
   res.status(204).end();
+});
+
+// GET /api/admin/push-status - why notifications are or are not being delivered
+app.get('/api/admin/push-status', async (req, res) => {
+  if (req.headers['x-admin-key'] !== ADMIN_KEY) return res.status(403).json({ error: 'Invalid admin key.' });
+  const db = await getDb();
+  res.json(pushDiagnostics(db.data));
 });
 
 // PATCH /api/auth/profile - update the current user's personal details
