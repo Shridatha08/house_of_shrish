@@ -652,3 +652,97 @@ test('meals are limited to the delivery radius; sweets are not', async () => {
   const mixed = await app.request('post', '/api/orders', { items: [...meal, ...ladoo], customer: farAway }, {}, {});
   assert.equal(mixed.body.error, 'Sorry Unavailable in your area. We are working to deliver soon!');
 });
+
+function driverFixture() {
+  const data = fixture();
+  data.drivers = [{ id: 77, name: 'Ravi', phone: '9777777777', passwordHash: 'hashed:drive123', active: true }];
+  data.driverSessions = [{ token: 'driver-token', driverId: 77, createdAt: now }];
+  return data;
+}
+const driverAuth = { authorization: 'Bearer driver-token' };
+
+test('drivers authenticate separately and cannot reach admin routes', async () => {
+  const app = application(driverFixture());
+
+  assert.equal((await app.request('get', '/api/driver/deliveries', {}, {}, {})).code, 401);
+  assert.equal((await app.request('post', '/api/driver/login', { phone: '9777777777', password: 'wrong' })).code, 401);
+
+  const session = await app.request('post', '/api/driver/login', { phone: '9777777777', password: 'drive123' });
+  assert.equal(session.code, 200);
+  assert.equal(session.body.driver.name, 'Ravi');
+  assert.equal(session.body.driver.passwordHash, undefined);
+
+  // A driver token must not unlock admin or customer surfaces.
+  assert.equal((await app.request('get', '/api/admin/orders', {}, {}, driverAuth)).code, 403);
+  assert.equal((await app.request('get', '/api/auth/me', {}, {}, driverAuth)).code, 401);
+  assert.equal((await app.request('get', '/api/orders/me', {}, {}, driverAuth)).code, 401);
+});
+
+test('revoking a driver kills their session immediately', async () => {
+  const app = application(driverFixture());
+  assert.equal((await app.request('get', '/api/driver/deliveries', {}, {}, driverAuth)).code, 200);
+
+  await app.request('delete', '/api/admin/drivers/:id', {}, { id: '77' }, { 'x-admin-key': 'test-admin' });
+  assert.equal((await app.request('get', '/api/driver/deliveries', {}, {}, driverAuth)).code, 401);
+});
+
+test('the run covers paid orders and subscription meals, shortest route first', async () => {
+  const data = driverFixture();
+  // Two customers: one next to the kitchen, one further east.
+  data.users = [
+    { ...customer, id: 1, passwordHash: 'hashed:password', lat: 12.9744, lng: 77.6743 },
+    { ...customer, id: 2, name: 'Far Customer', phone: '9000000002', passwordHash: 'x', lat: 12.9744, lng: 77.7000 }
+  ];
+  data.orders = [{
+    id: 900, orderNumber: '#900', userId: 2, status: 'paid', paymentStatus: 'verified',
+    createdAt: now, scheduledDate: '2026-10-10',
+    items: [{ id: 1, name: 'Single Meal', price: 129, quantity: 1, customisation: 'Meal A' }],
+    customer: { ...customer, name: 'Far Customer', lat: 12.9744, lng: 77.7000 }
+  }];
+  data.subscriptions = [{
+    id: 'sub-near', userId: 1, approved: true, itemName: 'Monthly (Lunch)',
+    startDate: '2026-10-10', workingDaysRequired: 5, skippedMeals: []
+  }];
+
+  const app = application(data);
+  const run = await app.request('get', '/api/driver/deliveries', {}, {}, driverAuth);
+  assert.equal(run.code, 200);
+  assert.equal(run.body.stops.length, 2, 'orders and subscription meals both appear');
+
+  // Nearest stop to the kitchen is sequenced first.
+  assert.equal(run.body.stops[0].sequence, 1);
+  assert.equal(run.body.stops[0].kind, 'subscription');
+  assert.equal(run.body.stops[1].kind, 'order');
+  assert.ok(run.body.stops[0].legKm < run.body.stops[1].legKm);
+  assert.equal(run.body.stops[0].customerPhone, customer.phone);
+});
+
+test('completing a stop works for both orders and subscription meals', async () => {
+  const data = driverFixture();
+  data.users = [{ ...customer, id: 1, passwordHash: 'hashed:password', lat: 12.9744, lng: 77.6743 }];
+  data.orders = [{
+    id: 900, orderNumber: '#900', userId: 1, status: 'paid', paymentStatus: 'verified',
+    createdAt: now, scheduledDate: '2026-10-10',
+    items: [{ id: 1, name: 'Single Meal', price: 129, quantity: 1, customisation: 'Meal A' }],
+    customer: { ...customer, lat: 12.9744, lng: 77.6743 }
+  }];
+  data.subscriptions = [{
+    id: 'sub-1', userId: 1, approved: true, itemName: 'Monthly (Lunch)',
+    startDate: '2026-10-10', workingDaysRequired: 5, skippedMeals: []
+  }];
+  const app = application(data);
+
+  assert.equal((await app.request('post', '/api/driver/deliveries/:id/delivered', {}, { id: '900' }, driverAuth)).code, 204);
+  assert.equal(app.state().orders[0].status, 'delivered');
+  assert.equal(app.state().orders[0].deliveredBy, 77);
+
+  assert.equal((await app.request('post', '/api/driver/deliveries/:id/delivered', {}, { id: 'sub-1:2026-10-10:lunch' }, driverAuth)).code, 204);
+  assert.equal(app.state().subscriptions[0].deliveredMeals.length, 1);
+
+  // Repeating a completed subscription meal must not duplicate it.
+  await app.request('post', '/api/driver/deliveries/:id/delivered', {}, { id: 'sub-1:2026-10-10:lunch' }, driverAuth);
+  assert.equal(app.state().subscriptions[0].deliveredMeals.length, 1);
+
+  const run = await app.request('get', '/api/driver/deliveries', {}, {}, driverAuth);
+  assert.ok(run.body.stops.every((stop) => stop.delivered), 'completed stops drop out of the pending route');
+});

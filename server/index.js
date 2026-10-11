@@ -130,6 +130,94 @@ function requiresLocalDelivery(menuItem) {
   return menuItem?.category === 'Pure Veg Meals';
 }
 
+function getDriverFromToken(data, req) {
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+  if (!token) return null;
+  const session = (data.driverSessions || []).find((entry) => entry.token === token);
+  if (!session) return null;
+  if (Date.now() - new Date(session.createdAt).getTime() >= 30 * 24 * 60 * 60 * 1000) return null;
+  const driver = (data.drivers || []).find((entry) => entry.id === session.driverId);
+  return driver && driver.active !== false ? driver : null;
+}
+
+function publicDriver(driver) {
+  return { id: driver.id, name: driver.name, phone: driver.phone, active: driver.active !== false };
+}
+
+function distanceBetweenKm(a, b) {
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const earthRadiusKm = 6371;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * earthRadiusKm * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+/// Nearest-neighbour from the kitchen, then 2-opt to undo the crossings that
+/// greedy ordering leaves behind. Exact TSP is unnecessary at this size.
+function optimiseRoute(stops) {
+  const kitchen = { lat: KITCHEN_LAT, lng: KITCHEN_LNG };
+  const located = stops.filter((stop) => stop.lat !== null && stop.lng !== null);
+  const unlocated = stops.filter((stop) => stop.lat === null || stop.lng === null);
+
+  const remaining = [...located];
+  const route = [];
+  let cursor = kitchen;
+  while (remaining.length > 0) {
+    let best = 0;
+    let bestDistance = Infinity;
+    for (let i = 0; i < remaining.length; i++) {
+      const d = distanceBetweenKm(cursor, remaining[i]);
+      if (d < bestDistance) {
+        bestDistance = d;
+        best = i;
+      }
+    }
+    cursor = remaining[best];
+    route.push(remaining.splice(best, 1)[0]);
+  }
+
+  const legLength = (list) => {
+    let total = 0;
+    let from = kitchen;
+    for (const stop of list) {
+      total += distanceBetweenKm(from, stop);
+      from = stop;
+    }
+    return total;
+  };
+
+  let improved = true;
+  let guard = 0;
+  while (improved && guard++ < 50) {
+    improved = false;
+    for (let i = 0; i < route.length - 1; i++) {
+      for (let j = i + 1; j < route.length; j++) {
+        const candidate = [...route];
+        candidate.splice(i, j - i + 1, ...route.slice(i, j + 1).reverse());
+        if (legLength(candidate) < legLength(route) - 1e-9) {
+          route.splice(0, route.length, ...candidate);
+          improved = true;
+        }
+      }
+    }
+  }
+
+  // Stops without coordinates cannot be sequenced, so they go last.
+  let from = kitchen;
+  const sequenced = route.map((stop, index) => {
+    const legKm = distanceBetweenKm(from, stop);
+    from = stop;
+    return { ...stop, sequence: index + 1, legKm: Number(legKm.toFixed(2)) };
+  });
+  return [
+    ...sequenced,
+    ...unlocated.map((stop, index) => ({ ...stop, sequence: sequenced.length + index + 1, legKm: null }))
+  ];
+}
+
 function validDeliveryDetails(details) {
   return typeof details.flatNumber === 'string' && details.flatNumber.trim().length > 0 && details.flatNumber.length <= 100 &&
     typeof details.pincode === 'string' && /^[1-9]\d{5}$/.test(details.pincode.trim());
@@ -620,6 +708,195 @@ app.post('/api/admin/device-token', async (req, res) => {
   const db = await getDb();
   registerDeviceToken(db.data, { token: token.trim(), isAdmin: true, platform });
   await db.write();
+  res.status(204).end();
+});
+
+// --- Drivers ---------------------------------------------------------------
+
+// GET /api/admin/drivers - list delivery drivers (requires admin key)
+app.get('/api/admin/drivers', async (req, res) => {
+  if (req.headers['x-admin-key'] !== ADMIN_KEY) return res.status(403).json({ error: 'Invalid admin key.' });
+  const db = await getDb();
+  res.json((db.data.drivers || []).map(publicDriver));
+});
+
+// POST /api/admin/drivers - create a driver login (requires admin key)
+app.post('/api/admin/drivers', async (req, res) => {
+  if (req.headers['x-admin-key'] !== ADMIN_KEY) return res.status(403).json({ error: 'Invalid admin key.' });
+  const { name, phone, password } = req.body || {};
+  if (typeof name !== 'string' || !name.trim()) return res.status(400).json({ error: 'Driver name is required.' });
+  if (typeof phone !== 'string' || !/^\d{10}$/.test(phone.trim())) {
+    return res.status(400).json({ error: 'A valid 10-digit phone number is required.' });
+  }
+  if (typeof password !== 'string' || password.length < 6) {
+    return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+  }
+
+  const db = await getDb();
+  db.data.drivers ||= [];
+  if (db.data.drivers.some((entry) => entry.phone === phone.trim())) {
+    return res.status(409).json({ error: 'A driver with this phone number already exists.' });
+  }
+  const driver = {
+    id: crypto.randomBytes(6).readUIntBE(0, 6),
+    name: name.trim(),
+    phone: phone.trim(),
+    passwordHash: await bcrypt.hash(password, 10),
+    active: true,
+    createdAt: new Date().toISOString()
+  };
+  db.data.drivers.push(driver);
+  await db.write();
+  res.status(201).json(publicDriver(driver));
+});
+
+// DELETE /api/admin/drivers/:id - revoke a driver and their sessions
+app.delete('/api/admin/drivers/:id', async (req, res) => {
+  if (req.headers['x-admin-key'] !== ADMIN_KEY) return res.status(403).json({ error: 'Invalid admin key.' });
+  const db = await getDb();
+  const driverId = Number(req.params.id);
+  const before = (db.data.drivers || []).length;
+  db.data.drivers = (db.data.drivers || []).filter((entry) => entry.id !== driverId);
+  if (db.data.drivers.length === before) return res.status(404).json({ error: 'Driver not found.' });
+  db.data.driverSessions = (db.data.driverSessions || []).filter((entry) => entry.driverId !== driverId);
+  await db.write();
+  res.status(204).end();
+});
+
+// POST /api/driver/login - authenticate a driver
+app.post('/api/driver/login', authRateLimit, async (req, res) => {
+  const { phone, password } = req.body || {};
+  if (typeof phone !== 'string' || typeof password !== 'string') {
+    return res.status(400).json({ error: 'Phone number and password are required.' });
+  }
+  const db = await getDb();
+  const driver = (db.data.drivers || []).find((entry) => entry.phone === phone.trim());
+  if (!driver || driver.active === false || !(await bcrypt.compare(password, driver.passwordHash))) {
+    return res.status(401).json({ error: 'Invalid phone number or password.' });
+  }
+  const token = crypto.randomBytes(24).toString('hex');
+  db.data.driverSessions ||= [];
+  db.data.driverSessions.push({ token, driverId: driver.id, createdAt: new Date().toISOString() });
+  await db.write();
+  res.json({ driver: publicDriver(driver), token });
+});
+
+// POST /api/driver/logout - revoke this driver session
+app.post('/api/driver/logout', async (req, res) => {
+  const db = await getDb();
+  const token = (req.headers.authorization || '').replace(/^Bearer /, '');
+  db.data.driverSessions = (db.data.driverSessions || []).filter((entry) => entry.token !== token);
+  await db.write();
+  res.status(204).end();
+});
+
+// GET /api/driver/deliveries - today's run, sequenced shortest-first
+app.get('/api/driver/deliveries', async (req, res) => {
+  const db = await getDb();
+  const driver = getDriverFromToken(db.data, req);
+  if (!driver) return res.status(401).json({ error: 'Not signed in.' });
+
+  const today = todayISTStr();
+  const usersById = new Map(db.data.users.map((entry) => [entry.id, entry]));
+  const stops = [];
+
+  for (const order of db.data.orders) {
+    const scheduled = order.scheduledDate || businessDate(order.createdAt);
+    if (scheduled !== today) continue;
+    if (!['paid', 'preparing', 'out_for_delivery'].includes(order.status)) continue;
+    if (paymentStatus(order) !== 'verified') continue;
+    stops.push({
+      kind: 'order',
+      id: String(order.id),
+      reference: `#${order.orderNumber}`,
+      customerName: order.customer.name,
+      customerPhone: order.customer.phone,
+      address: order.customer.address,
+      flatNumber: order.customer.flatNumber || '',
+      pincode: order.customer.pincode || '',
+      lat: order.customer.lat ?? null,
+      lng: order.customer.lng ?? null,
+      items: order.items.map((item) => `${item.quantity}× ${item.name}`),
+      status: order.status,
+      delivered: order.status === 'delivered'
+    });
+  }
+
+  // Subscribers receive meals daily without placing an order each time.
+  for (const subscription of db.data.subscriptions) {
+    if (!subscriptionInService(subscription, db.data)) continue;
+    const schedule = buildSubscriptionSchedule(subscription, subscriptionHolidays(db.data));
+    const dueToday = schedule.schedule.filter((entry) => entry.date === today && entry.status !== 'skipped');
+    if (dueToday.length === 0) continue;
+    const customer = usersById.get(subscription.userId);
+    if (!customer) continue;
+    const deliveredMeals = subscription.deliveredMeals || [];
+    for (const meal of dueToday) {
+      const alreadyDelivered = deliveredMeals.some((entry) => entry.date === meal.date && entry.meal === meal.meal);
+      stops.push({
+        kind: 'subscription',
+        id: `${subscription.id}:${meal.date}:${meal.meal}`,
+        reference: subscription.itemName,
+        customerName: customer.name,
+        customerPhone: customer.phone,
+        address: customer.address,
+        flatNumber: customer.flatNumber || '',
+        pincode: customer.pincode || '',
+        lat: customer.lat ?? null,
+        lng: customer.lng ?? null,
+        items: [`1× ${meal.meal === 'dinner' ? 'Dinner' : 'Lunch'}${subscription.customisation ? ` · ${subscription.customisation}` : ''}`],
+        status: alreadyDelivered ? 'delivered' : 'pending',
+        delivered: alreadyDelivered
+      });
+    }
+  }
+
+  const pending = optimiseRoute(stops.filter((stop) => !stop.delivered));
+  const done = stops.filter((stop) => stop.delivered).map((stop) => ({ ...stop, sequence: null, legKm: null }));
+  res.json({
+    driver: publicDriver(driver),
+    date: today,
+    kitchen: { lat: KITCHEN_LAT, lng: KITCHEN_LNG },
+    stops: [...pending, ...done]
+  });
+});
+
+// POST /api/driver/deliveries/:id/delivered - complete a stop
+app.post('/api/driver/deliveries/:id/delivered', async (req, res) => {
+  const db = await getDb();
+  const driver = getDriverFromToken(db.data, req);
+  if (!driver) return res.status(401).json({ error: 'Not signed in.' });
+
+  const stopId = String(req.params.id);
+  const [subscriptionId, date, meal] = stopId.split(':');
+
+  if (date && meal) {
+    const subscription = db.data.subscriptions.find((entry) => entry.id === subscriptionId);
+    if (!subscription) return res.status(404).json({ error: 'Delivery not found.' });
+    subscription.deliveredMeals ||= [];
+    const already = subscription.deliveredMeals.some((entry) => entry.date === date && entry.meal === meal);
+    if (!already) {
+      subscription.deliveredMeals.push({ date, meal, deliveredAt: new Date().toISOString(), driverId: driver.id });
+      await db.write();
+    }
+    return res.status(204).end();
+  }
+
+  const order = db.data.orders.find((entry) => entry.id === Number(stopId));
+  if (!order) return res.status(404).json({ error: 'Delivery not found.' });
+  if (!['paid', 'preparing', 'out_for_delivery'].includes(order.status)) {
+    return res.status(409).json({ error: 'This order is not out for delivery.' });
+  }
+  order.status = 'delivered';
+  order.statusUpdatedAt = new Date().toISOString();
+  order.deliveredBy = driver.id;
+  await db.write();
+
+  await notifyOrder(db, order, {
+    title: 'Delivered',
+    body: `Order #${order.orderNumber} has been delivered. Enjoy your meal!`,
+    data: { type: 'order_status', orderId: order.id, status: 'delivered' }
+  });
   res.status(204).end();
 });
 
