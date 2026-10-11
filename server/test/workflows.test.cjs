@@ -914,3 +914,53 @@ test('unrelated writes no longer block each other', async () => {
   assert.equal(app.state().orders.length, 2);
   assert.equal(app.state().deviceTokens.length, 1);
 });
+
+test('unpaid orders cannot pile up and exhaust the kitchen', async () => {
+  const app = application();
+  for (let i = 0; i < 3; i++) assert.equal((await purchase(app)).code, 201, `order ${i + 1}`);
+
+  const refused = await purchase(app);
+  assert.equal(refused.code, 429);
+  assert.match(refused.body.error, /awaiting payment/);
+
+  // Clearing one frees the slot it was holding.
+  await app.request('patch', '/api/orders/:id/cancel', {}, { id: app.state().orders[0].id });
+  assert.equal((await purchase(app)).code, 201);
+});
+
+test('submitted payment still counts, but a settled order does not', async () => {
+  const app = application();
+  const first = await purchase(app);
+  await purchase(app);
+  await purchase(app);
+
+  // Claiming payment is not proof of it, so the order keeps holding its slot.
+  await app.request('patch', '/api/orders/:id/mark-paid', {}, { id: first.body.order.id });
+  assert.equal((await purchase(app)).code, 429);
+
+  // Once the admin verifies it, the customer is no longer holding anything.
+  await app.request('patch', '/api/admin/orders/:id/status', { status: 'paid' }, { id: first.body.order.id }, adminHeaders);
+  assert.equal((await purchase(app)).code, 201);
+});
+
+test('an abandoned order stops blocking once it expires', async () => {
+  const app = application();
+  for (let i = 0; i < 3; i++) await purchase(app);
+  assert.equal((await purchase(app)).code, 429);
+
+  app.clock('2026-10-10T04:31:00Z');
+  assert.equal((await purchase(app)).code, 201, 'expired orders release their hold');
+});
+
+test('one customer cannot block another', async () => {
+  const app = application();
+  const guest = (phone) => app.request('post', '/api/orders', {
+    items: [{ id: 6, quantity: 1, customisation: '200g' }], customer: { ...customer, phone }
+  }, {}, {});
+
+  for (let i = 0; i < 3; i++) assert.equal((await guest('9111111111')).code, 201);
+  assert.equal((await guest('9111111111')).code, 429);
+
+  assert.equal((await guest('9222222222')).code, 201, 'a different guest is unaffected');
+  assert.equal((await purchase(app)).code, 201, 'and so is a signed-in customer');
+});

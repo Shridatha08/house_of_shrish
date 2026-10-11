@@ -76,6 +76,13 @@ app.use((req, res, next) => {
 
 const authRateLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 10 });
 const adminRateLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 30, key: (req) => req.ip });
+// Deliberately loose: Indian mobile carriers put many real customers behind one
+// NAT address, so this is only a backstop against a flood. The per-customer cap
+// on unsettled orders is what actually protects kitchen capacity.
+const orderRateLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 20 });
+// An unpaid order holds a meal slot, so a handful of them can exhaust the day's
+// capacity and lock out paying customers.
+const MAX_UNSETTLED_ORDERS = Number(process.env.MAX_UNSETTLED_ORDERS ?? 3);
 app.use('/api/admin', adminRateLimit);
 
 async function getUserFromToken(db, req) {
@@ -1538,8 +1545,18 @@ app.patch('/api/admin/orders/:id/status', async (req, res) => {
   res.json(safeOrder);
 });
 
+// Orders that are still holding stock without having been paid for. A signed-in
+// customer is matched on their account; a guest on the phone number they gave.
+function unsettledOrders(data, user, phone) {
+  return data.orders.filter((order) => {
+    if (!['pending_payment', 'payment_review'].includes(order.status)) return false;
+    if (!reservesStock(order)) return false;
+    return user ? order.userId === user.id : !order.userId && order.customer?.phone === phone;
+  });
+}
+
 // POST /api/orders - place a new order
-app.post('/api/orders', async (req, res) => {
+app.post('/api/orders', orderRateLimit, async (req, res) => {
   const { items, customer, subscriptionStartDate } = req.body || {};
 
   if (!Array.isArray(items) || items.length === 0) {
@@ -1590,6 +1607,12 @@ app.post('/api/orders', async (req, res) => {
   if (requestedMeals > 0 && kitchenMealCount(db.data, today) + requestedMeals > settings.dailyOrderCapacity) return res.status(409).json({ error: 'Kitchen capacity for today has been reached.' });
 
   const user = await getUserFromToken(db, req);
+
+  const unsettled = unsettledOrders(db.data, user, customer.phone.trim());
+  if (unsettled.length >= MAX_UNSETTLED_ORDERS) {
+    return res.status(429).json({ error: `You have ${unsettled.length} orders still awaiting payment. Please pay or cancel one before placing another.` });
+  }
+
   const requiresAccount = items.some((line) => {
     const menuItem = menuById.get(Number(line.id));
     return menuItem && menuItem.name.toLowerCase().startsWith('monthly');
