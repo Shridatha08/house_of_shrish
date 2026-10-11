@@ -1361,3 +1361,54 @@
     display: none !important;
   }
 }
+
+.app-footer {
+  display: flex;
+  justify-content: center;
+  gap: 1.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 1.5rem 1rem;
+  font-size: 0.85rem;
+  color: #6b7280;
+  border-top: 1px solid #e5e7eb;
+}
+
+.app-footer a {
+  color: inherit;
+}
+
+.privacy-page {
+  max-width: 48rem;
+  margin: 0 auto;
+  padding: 1rem 0 2rem;
+  line-height: 1.65;
+}
+
+.privacy-page h2 {
+  margin-top: 1.75rem;
+}
+
+.privacy-updated {
+  color: #6b7280;
+  font-size: 0.9rem;
+}
+
+.danger-zone {
+  margin-top: 2rem;
+  padding: 1.25rem;
+  border: 1px solid #fecaca;
+  border-radius: 12px;
+  background: #fff7f7;
+}
+
+.danger-zone h3 {
+  margin: 0 0 0.5rem;
+  color: #b91c1c;
+}
+
+.danger-zone p {
+  margin: 0 0 1rem;
+  font-size: 0.9rem;
+  color: #6b7280;
+}

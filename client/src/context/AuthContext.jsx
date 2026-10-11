@@ -49,6 +49,12 @@ export function AuthProvider({ children }) {
     persist(loggedInUser, newToken);
   }
 
+  function clearSession() {
+    setUser(null);
+    setToken(null);
+    localStorage.removeItem(STORAGE_KEY);
+  }
+
   async function logout() {
     try {
       if (token) await logoutUser(token);
@@ -56,16 +62,14 @@ export function AuthProvider({ children }) {
       alert('Logout could not be confirmed by the server. Please try again.');
       return;
     }
-    setUser(null);
-    setToken(null);
-    localStorage.removeItem(STORAGE_KEY);
+    clearSession();
   }
 
   function updateUser(nextUser) {
     setUser(nextUser);
   }
 
-  const value = { user, token, ready, register, login, logout, updateUser };
+  const value = { user, token, ready, register, login, logout, updateUser, clearSession };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

@@ -68,6 +68,9 @@ export const getCurrentUser = (token) =>
 export const logoutUser = (token) =>
   request('/api/auth/logout', { method: 'POST', headers: authHeaders(token) });
 
+export const deleteAccount = (token) =>
+  request('/api/auth/me', { method: 'DELETE', headers: authHeaders(token) });
+
 export const getHolidays = () => request('/api/holidays');
 
 export const addHoliday = (payload, adminKey) =>

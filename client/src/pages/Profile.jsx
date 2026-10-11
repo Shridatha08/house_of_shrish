@@ -1,11 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { updateProfile, getMySubscriptions, getMyOrders, cancelOrder, requestRefund, skipSubscriptionMeal } from '../api';
+import { updateProfile, getMySubscriptions, getMyOrders, cancelOrder, requestRefund, skipSubscriptionMeal, deleteAccount } from '../api';
 
 export default function Profile() {
-  const { user, token, ready, updateUser } = useAuth();
-
+  const { user, token, ready, updateUser, clearSession } = useAuth();
   const [name, setName] = useState(user?.name || '');
   const [phone, setPhone] = useState(user?.phone || '');
   const [address, setAddress] = useState(user?.address || '');
@@ -25,6 +24,21 @@ export default function Profile() {
   const [subscriptionsError, setSubscriptionsError] = useState('');
   const [loadingHistory, setLoadingHistory] = useState(true);
   const [historyRefresh, setHistoryRefresh] = useState(0);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+
+  async function handleDeleteAccount() {
+    if (!window.confirm('Delete your account? This cannot be undone. Your profile, saved address, meal subscriptions and notification settings are removed permanently.')) return;
+    setDeleteError('');
+    setDeleting(true);
+    try {
+      await deleteAccount(token);
+      clearSession();
+    } catch (err) {
+      setDeleteError(err.message);
+      setDeleting(false);
+    }
+  }
 
   useEffect(() => {
     if (!user) return;
@@ -305,6 +319,18 @@ export default function Profile() {
             </div>
           ))}
         </div>
+      </div>
+      <div className="danger-zone" id="delete-account">
+        <h3>Delete your account</h3>
+        <p>
+          Removes your profile, saved address, meal subscriptions and notification
+          settings. Past orders are kept for our records with your details removed.
+          An order in progress has to be delivered or cancelled first.
+        </p>
+        {deleteError && <p className="form-error">{deleteError}</p>}
+        <button type="button" className="btn-add" onClick={handleDeleteAccount} disabled={deleting}>
+          {deleting ? 'Deleting…' : 'Delete my account'}
+        </button>
       </div>
     </div>
   );

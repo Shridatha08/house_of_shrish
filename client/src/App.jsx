@@ -11,6 +11,7 @@ import EventsCalendar from './pages/EventsCalendar'
 import AdminHolidays from './pages/AdminHolidays'
 import Profile from './pages/Profile'
 import Invoice from './pages/Invoice'
+import Privacy from './pages/Privacy'
 import logo from '../../logo_white.png'
 import calendarIcon from '../../calendar.png'
 import userIcon from '../../user.png'
@@ -94,8 +95,13 @@ function App() {
             <Route path="/admin/holidays" element={<AdminHolidays />} />
             <Route path="/profile" element={<Profile />} />
             <Route path="/invoice/:id" element={<Invoice />} />
+            <Route path="/privacy" element={<Privacy />} />
           </Routes>
         </main>
+        <footer className="app-footer">
+          <Link to="/privacy">Privacy Policy</Link>
+          <span>FSSAI 21226187002762</span>
+        </footer>
       </CartProvider>
     </AuthProvider>
   )

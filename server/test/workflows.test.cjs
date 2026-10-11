@@ -262,6 +262,43 @@ test('expired sessions cannot access profiles; logout revokes current token', as
   assert.equal(app.state().sessions.length, 0);
 });
 
+test('account deletion clears personal data but keeps orders on the books', async () => {
+  const app = application();
+  const created = await purchase(app);
+  await app.request('post', '/api/device-token', { token: 'a'.repeat(32), platform: 'android' });
+  await app.request('patch', '/api/orders/:id/cancel', {}, { id: created.body.order.id });
+
+  assert.equal((await app.request('delete', '/api/auth/me')).code, 204);
+  const state = app.state();
+  assert.equal(state.users.length, 0);
+  assert.equal(state.sessions.length, 0);
+  assert.equal(state.deviceTokens.length, 0);
+  assert.equal(state.orders.length, 1);
+  assert.equal(state.orders[0].userId, null);
+  assert.equal(state.orders[0].customer.phone, '');
+  assert.equal(state.orders[0].accessToken, undefined);
+  assert.equal((await app.request('get', '/api/auth/me')).code, 401);
+});
+
+test('an order in progress blocks account deletion', async () => {
+  const app = application();
+  const created = await purchase(app);
+  await app.request('patch', '/api/orders/:id/mark-paid', {}, { id: created.body.order.id });
+
+  const blocked = await app.request('delete', '/api/auth/me');
+  assert.equal(blocked.code, 409);
+  assert.equal(app.state().users.length, 1);
+
+  await app.request('patch', '/api/orders/:id/cancel', {}, { id: created.body.order.id });
+  assert.equal((await app.request('delete', '/api/auth/me')).code, 204);
+});
+
+test('deletion requires a session', async () => {
+  const app = application();
+  assert.equal((await app.request('delete', '/api/auth/me', {}, {}, {})).code, 401);
+  assert.equal(app.state().users.length, 1);
+});
+
 test('expired reset keys fail without changing a password', async () => {
   const app = application();
   await app.request('post', '/api/auth/password-reset/request', { phone: customer.phone });

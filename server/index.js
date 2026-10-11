@@ -656,6 +656,39 @@ app.post('/api/auth/logout', async (req, res) => {
   res.status(204).end();
 });
 
+// Orders stay on the books for accounting, stripped of anything identifying.
+function purgeUserData(data, userId) {
+  for (const order of data.orders) {
+    if (order.userId !== userId) continue;
+    order.userId = null;
+    delete order.accessToken;
+    order.customer = { name: 'Deleted account', phone: '', address: '', flatNumber: '', pincode: '', lat: null, lng: null };
+  }
+  data.users = data.users.filter((entry) => entry.id !== userId);
+  data.sessions = data.sessions.filter((entry) => entry.userId !== userId);
+  data.subscriptions = data.subscriptions.filter((entry) => entry.userId !== userId);
+  data.deviceTokens = (data.deviceTokens || []).filter((entry) => entry.userId !== userId);
+  data.passwordResetRequests = (data.passwordResetRequests || []).filter((entry) => entry.userId !== userId);
+}
+
+// DELETE /api/auth/me - customer-initiated account deletion, required by Play
+app.delete('/api/auth/me', async (req, res) => {
+  const db = await getDb();
+  const user = await getUserFromToken(db, req);
+  if (!user) return res.status(401).json({ error: 'Not signed in.' });
+
+  // Deleting mid-delivery would strand food already paid for and in transit.
+  const inFlight = db.data.orders.some((order) =>
+    order.userId === user.id && ['payment_review', 'paid', 'preparing', 'out_for_delivery'].includes(order.status));
+  if (inFlight) {
+    return res.status(409).json({ error: 'You have an order in progress. Please wait until it is delivered, or cancel it, before deleting your account.' });
+  }
+
+  purgeUserData(db.data, user.id);
+  await db.write();
+  res.status(204).end();
+});
+
 // POST /api/device-token - register this device for customer push notifications
 app.post('/api/device-token', async (req, res) => {
   const db = await getDb();
@@ -1306,12 +1339,10 @@ app.delete('/api/admin/users/:id', async (req, res) => {
   const db = await getDb();
   const userId = Number(req.params.id);
   const before = db.data.users.length;
-  db.data.users = db.data.users.filter((u) => u.id !== userId);
+  purgeUserData(db.data, userId);
   if (db.data.users.length === before) {
     return res.status(404).json({ error: 'User not found.' });
   }
-  db.data.sessions = db.data.sessions.filter((s) => s.userId !== userId);
-  db.data.subscriptions = db.data.subscriptions.filter((s) => s.userId !== userId);
   await db.write();
   res.status(204).end();
 });
