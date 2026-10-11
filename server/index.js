@@ -3,7 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
-import { getDb } from './db.js';
+import { getDb, patchDocument } from './db.js';
 import { notifyAdmins, notifyAllCustomers, notifyOrder, notifyUser, pushDiagnostics, registerDeviceToken, removeDeviceToken } from './push.js';
 
 const app = express();
@@ -946,8 +946,11 @@ app.post('/api/driver/location', async (req, res) => {
   const point = readCoordinates(req.body);
   if (!point.ok || point.lat === null) return res.status(400).json({ error: 'A valid latitude and longitude are required.' });
 
-  driver.location = { lat: point.lat, lng: point.lng, at: new Date().toISOString() };
-  await db.write();
+  // Pings arrive every few seconds. A full document write would collide with
+  // orders being placed at the same moment and fail them, so this patches the
+  // one field instead of taking the revision lock.
+  const index = db.data.drivers.findIndex((entry) => entry.id === driver.id);
+  await patchDocument({ [`drivers.${index}.location`]: { lat: point.lat, lng: point.lng, at: new Date().toISOString() } });
   res.status(204).end();
 });
 
@@ -956,8 +959,8 @@ app.delete('/api/driver/location', async (req, res) => {
   const db = await getDb();
   const driver = getDriverFromToken(db.data, req);
   if (!driver) return res.status(401).json({ error: 'Not signed in.' });
-  delete driver.location;
-  await db.write();
+  const index = db.data.drivers.findIndex((entry) => entry.id === driver.id);
+  await patchDocument({ [`drivers.${index}.location`]: null });
   res.status(204).end();
 });
 

@@ -66,6 +66,15 @@ function getClient() {
   return clientPromise;
 }
 
+// Sets individual fields without taking the whole-document revision lock.
+// For high-frequency, low-value writes (a driver's position) that would
+// otherwise make unrelated requests fail with a stale-write conflict.
+export async function patchDocument(updates) {
+  const client = await getClient();
+  const collection = client.db(MONGODB_DB_NAME).collection('appData');
+  await collection.updateOne({ _id: 'main' }, { $set: updates });
+}
+
 // Returns a lowdb-like object: { data, write() } backed by a single MongoDB document,
 // so existing route handlers (db.data.menu, db.data.orders, etc.) don't need to change.
 export async function getDb() {

@@ -70,6 +70,15 @@ function application(data = fixture()) {
         snapshot.revision++;
         state = structuredClone(snapshot);
       } };
+    },
+    // Field-level write that deliberately skips the revision check.
+    patchDocument: async (updates) => {
+      for (const [path, value] of Object.entries(updates)) {
+        const keys = path.split('.');
+        let target = state;
+        for (const key of keys.slice(0, -1)) target = target[key];
+        target[keys.at(-1)] = value;
+      }
     }
   };
   vm.createContext(context);
@@ -355,7 +364,7 @@ test('actual persistence adapter rejects competing snapshots instead of losing d
   };
   const context = { structuredClone, process: { env: { MONGODB_URI: 'mock' } }, MongoClient: class { connect() { return Promise.resolve({ db: () => ({ collection: () => collection }) }); } } };
   vm.createContext(context);
-  vm.runInContext(dbSource.replace(/^import .*;\r?$/gm, '').replace('export async function', 'async function'), context);
+  vm.runInContext(dbSource.replace(/^import .*;\r?$/gm, '').replace(/export async function/g, 'async function'), context);
   const first = await context.getDb();
   const second = await context.getDb();
   first.data.orders.push({ id: 1 });
@@ -869,4 +878,25 @@ test('a driver can stop sharing their position', async () => {
 
   const tracked = await app.request('get', '/api/orders/:id/track', {}, { id: '900' });
   assert.equal(tracked.body.trackable, false);
+});
+
+test('position pings do not make concurrent orders fail with a stale write', async () => {
+  const app = application(trackingFixture());
+
+  // A ping and an order placed at the same moment must both succeed: the ping
+  // patches one field rather than rewriting the whole document.
+  const [ping, order] = await Promise.all([
+    app.request('post', '/api/driver/location', { lat: 12.9744, lng: 77.6743 }, {}, driverAuth),
+    purchase(app)
+  ]);
+  assert.equal(ping.code, 204);
+  assert.equal(order.code, 201, order.body && order.body.error);
+
+  // Back-to-back pings never conflict with each other either.
+  const burst = await Promise.all(Array.from({ length: 5 }, (_, i) =>
+    app.request('post', '/api/driver/location', { lat: 12.9744 + i / 1000, lng: 77.6743 }, {}, driverAuth)));
+  assert.deepEqual(burst.map((r) => r.code), [204, 204, 204, 204, 204]);
+
+  const tracked = await app.request('get', '/api/orders/:id/track', {}, { id: '900' });
+  assert.equal(tracked.body.trackable, true);
 });
