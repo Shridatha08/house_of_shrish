@@ -157,14 +157,13 @@ function distanceBetweenKm(a, b) {
 
 /// Nearest-neighbour from the kitchen, then 2-opt to undo the crossings that
 /// greedy ordering leaves behind. Exact TSP is unnecessary at this size.
-function optimiseRoute(stops) {
-  const kitchen = { lat: KITCHEN_LAT, lng: KITCHEN_LNG };
+function optimiseRoute(stops, origin = { lat: KITCHEN_LAT, lng: KITCHEN_LNG }) {
   const located = stops.filter((stop) => stop.lat !== null && stop.lng !== null);
   const unlocated = stops.filter((stop) => stop.lat === null || stop.lng === null);
 
   const remaining = [...located];
   const route = [];
-  let cursor = kitchen;
+  let cursor = origin;
   while (remaining.length > 0) {
     let best = 0;
     let bestDistance = Infinity;
@@ -181,7 +180,7 @@ function optimiseRoute(stops) {
 
   const legLength = (list) => {
     let total = 0;
-    let from = kitchen;
+    let from = origin;
     for (const stop of list) {
       total += distanceBetweenKm(from, stop);
       from = stop;
@@ -206,7 +205,7 @@ function optimiseRoute(stops) {
   }
 
   // Stops without coordinates cannot be sequenced, so they go last.
-  let from = kitchen;
+  let from = origin;
   const sequenced = route.map((stop, index) => {
     const legKm = distanceBetweenKm(from, stop);
     from = stop;
@@ -216,6 +215,121 @@ function optimiseRoute(stops) {
     ...sequenced,
     ...unlocated.map((stop, index) => ({ ...stop, sequence: sequenced.length + index + 1, legKm: null }))
   ];
+}
+
+// Everything the kitchen owes a customer today: one-off orders plus the day's
+// subscription meals, which are delivered without an order being placed.
+function buildRunStops(data, today) {
+  const usersById = new Map(data.users.map((entry) => [entry.id, entry]));
+  const stops = [];
+
+  for (const order of data.orders) {
+    const scheduled = order.scheduledDate || businessDate(order.createdAt);
+    if (scheduled !== today) continue;
+    if (!['paid', 'preparing', 'out_for_delivery'].includes(order.status)) continue;
+    if (paymentStatus(order) !== 'verified') continue;
+    stops.push({
+      kind: 'order',
+      id: String(order.id),
+      reference: `#${order.orderNumber}`,
+      customerName: order.customer.name,
+      customerPhone: order.customer.phone,
+      address: order.customer.address,
+      flatNumber: order.customer.flatNumber || '',
+      pincode: order.customer.pincode || '',
+      lat: order.customer.lat ?? null,
+      lng: order.customer.lng ?? null,
+      items: order.items.map((item) => `${item.quantity}× ${item.name}`),
+      status: order.status,
+      delivered: order.status === 'delivered'
+    });
+  }
+
+  for (const subscription of data.subscriptions) {
+    if (!subscriptionInService(subscription, data)) continue;
+    const schedule = buildSubscriptionSchedule(subscription, subscriptionHolidays(data));
+    const dueToday = schedule.schedule.filter((entry) => entry.date === today && entry.status !== 'skipped');
+    if (dueToday.length === 0) continue;
+    const customer = usersById.get(subscription.userId);
+    if (!customer) continue;
+    const deliveredMeals = subscription.deliveredMeals || [];
+    for (const meal of dueToday) {
+      const alreadyDelivered = deliveredMeals.some((entry) => entry.date === meal.date && entry.meal === meal.meal);
+      stops.push({
+        kind: 'subscription',
+        id: `${subscription.id}:${meal.date}:${meal.meal}`,
+        reference: subscription.itemName,
+        customerName: customer.name,
+        customerPhone: customer.phone,
+        address: customer.address,
+        flatNumber: customer.flatNumber || '',
+        pincode: customer.pincode || '',
+        lat: customer.lat ?? null,
+        lng: customer.lng ?? null,
+        items: [`1× ${meal.meal === 'dinner' ? 'Dinner' : 'Lunch'}${subscription.customisation ? ` · ${subscription.customisation}` : ''}`],
+        status: alreadyDelivered ? 'delivered' : 'pending',
+        delivered: alreadyDelivered
+      });
+    }
+  }
+
+  return stops;
+}
+
+// A driver who has not reported in for this long is treated as offline rather
+// than shown frozen on the customer's map.
+const DRIVER_FIX_MAX_AGE_MS = Number(process.env.DRIVER_FIX_MAX_AGE_MS ?? 5 * 60 * 1000);
+const AVERAGE_SPEED_KMPH = Number(process.env.AVERAGE_SPEED_KMPH ?? 18);
+const STOP_SERVICE_MINUTES = Number(process.env.STOP_SERVICE_MINUTES ?? 3);
+// Straight-line distance understates road distance; this is the usual city fudge.
+const ROAD_DETOUR_FACTOR = Number(process.env.ROAD_DETOUR_FACTOR ?? 1.35);
+
+function driverFix(driver, now = Date.now()) {
+  const fix = driver?.location;
+  if (!fix || typeof fix.lat !== 'number' || typeof fix.lng !== 'number') return null;
+  if (now - new Date(fix.at).getTime() > DRIVER_FIX_MAX_AGE_MS) return null;
+  return fix;
+}
+
+// Stops are shared across drivers, so an explicit assignment wins and otherwise
+// the one driver currently reporting a position is the one out delivering.
+function trackingDriver(data, order) {
+  const drivers = (data.drivers || []).filter((entry) => entry.active !== false);
+  if (order.driverId) {
+    const assigned = drivers.find((entry) => entry.id === order.driverId);
+    return assigned && driverFix(assigned) ? assigned : null;
+  }
+  const live = drivers.filter((entry) => driverFix(entry));
+  return live.length === 1 ? live[0] : null;
+}
+
+function estimateArrival(data, order, fix) {
+  const destination = readCoordinates(order.customer);
+  const hasDestination = destination.ok && destination.lat !== null;
+  const direct = hasDestination ? distanceBetweenKm(fix, destination) : null;
+
+  const route = optimiseRoute(buildRunStops(data, todayISTStr()).filter((stop) => !stop.delivered), fix);
+  const index = route.findIndex((stop) => stop.kind === 'order' && stop.id === String(order.id));
+
+  // Not in today's run (or no pin on file): fall back to a direct estimate.
+  if (index < 0 || route[index].legKm === null) {
+    if (direct === null) return { destination: null, stopsAway: null, distanceKm: null, etaMinutes: null };
+    return {
+      destination: { lat: destination.lat, lng: destination.lng },
+      stopsAway: null,
+      distanceKm: Number(direct.toFixed(2)),
+      etaMinutes: Math.max(1, Math.round((direct * ROAD_DETOUR_FACTOR) / AVERAGE_SPEED_KMPH * 60))
+    };
+  }
+
+  const alongRoute = route.slice(0, index + 1).reduce((total, stop) => total + (stop.legKm || 0), 0);
+  const driving = (alongRoute * ROAD_DETOUR_FACTOR) / AVERAGE_SPEED_KMPH * 60;
+  return {
+    destination: { lat: route[index].lat, lng: route[index].lng },
+    stopsAway: index,
+    distanceKm: Number(alongRoute.toFixed(2)),
+    etaMinutes: Math.max(1, Math.round(driving + index * STOP_SERVICE_MINUTES))
+  };
 }
 
 function validDeliveryDetails(details) {
@@ -823,6 +937,30 @@ app.post('/api/driver/logout', async (req, res) => {
   res.status(204).end();
 });
 
+// POST /api/driver/location - the driver app's position ping while on a run
+app.post('/api/driver/location', async (req, res) => {
+  const db = await getDb();
+  const driver = getDriverFromToken(db.data, req);
+  if (!driver) return res.status(401).json({ error: 'Not signed in.' });
+
+  const point = readCoordinates(req.body);
+  if (!point.ok || point.lat === null) return res.status(400).json({ error: 'A valid latitude and longitude are required.' });
+
+  driver.location = { lat: point.lat, lng: point.lng, at: new Date().toISOString() };
+  await db.write();
+  res.status(204).end();
+});
+
+// DELETE /api/driver/location - stop sharing position when the run ends
+app.delete('/api/driver/location', async (req, res) => {
+  const db = await getDb();
+  const driver = getDriverFromToken(db.data, req);
+  if (!driver) return res.status(401).json({ error: 'Not signed in.' });
+  delete driver.location;
+  await db.write();
+  res.status(204).end();
+});
+
 // GET /api/driver/deliveries - today's run, sequenced shortest-first
 app.get('/api/driver/deliveries', async (req, res) => {
   const db = await getDb();
@@ -830,60 +968,7 @@ app.get('/api/driver/deliveries', async (req, res) => {
   if (!driver) return res.status(401).json({ error: 'Not signed in.' });
 
   const today = todayISTStr();
-  const usersById = new Map(db.data.users.map((entry) => [entry.id, entry]));
-  const stops = [];
-
-  for (const order of db.data.orders) {
-    const scheduled = order.scheduledDate || businessDate(order.createdAt);
-    if (scheduled !== today) continue;
-    if (!['paid', 'preparing', 'out_for_delivery'].includes(order.status)) continue;
-    if (paymentStatus(order) !== 'verified') continue;
-    stops.push({
-      kind: 'order',
-      id: String(order.id),
-      reference: `#${order.orderNumber}`,
-      customerName: order.customer.name,
-      customerPhone: order.customer.phone,
-      address: order.customer.address,
-      flatNumber: order.customer.flatNumber || '',
-      pincode: order.customer.pincode || '',
-      lat: order.customer.lat ?? null,
-      lng: order.customer.lng ?? null,
-      items: order.items.map((item) => `${item.quantity}× ${item.name}`),
-      status: order.status,
-      delivered: order.status === 'delivered'
-    });
-  }
-
-  // Subscribers receive meals daily without placing an order each time.
-  for (const subscription of db.data.subscriptions) {
-    if (!subscriptionInService(subscription, db.data)) continue;
-    const schedule = buildSubscriptionSchedule(subscription, subscriptionHolidays(db.data));
-    const dueToday = schedule.schedule.filter((entry) => entry.date === today && entry.status !== 'skipped');
-    if (dueToday.length === 0) continue;
-    const customer = usersById.get(subscription.userId);
-    if (!customer) continue;
-    const deliveredMeals = subscription.deliveredMeals || [];
-    for (const meal of dueToday) {
-      const alreadyDelivered = deliveredMeals.some((entry) => entry.date === meal.date && entry.meal === meal.meal);
-      stops.push({
-        kind: 'subscription',
-        id: `${subscription.id}:${meal.date}:${meal.meal}`,
-        reference: subscription.itemName,
-        customerName: customer.name,
-        customerPhone: customer.phone,
-        address: customer.address,
-        flatNumber: customer.flatNumber || '',
-        pincode: customer.pincode || '',
-        lat: customer.lat ?? null,
-        lng: customer.lng ?? null,
-        items: [`1× ${meal.meal === 'dinner' ? 'Dinner' : 'Lunch'}${subscription.customisation ? ` · ${subscription.customisation}` : ''}`],
-        status: alreadyDelivered ? 'delivered' : 'pending',
-        delivered: alreadyDelivered
-      });
-    }
-  }
-
+  const stops = buildRunStops(db.data, today);
   const pending = optimiseRoute(stops.filter((stop) => !stop.delivered));
   const done = stops.filter((stop) => stop.delivered).map((stop) => ({ ...stop, sequence: null, legKm: null }));
   res.json({
@@ -1667,6 +1752,35 @@ app.get('/api/orders/:id', async (req, res) => {
   if (!canAccessOrder(order, user, req)) return res.status(403).json({ error: 'You cannot access this order.' });
   const { accessToken, ...safeOrder } = order;
   res.json({ ...safeOrder, upiUri: `upi://pay?pa=${encodeURIComponent(UPI_ID)}&pn=${encodeURIComponent(MERCHANT_NAME)}&am=${order.total}&cu=INR&tn=${encodeURIComponent('Order ' + order.id)}` });
+});
+
+// GET /api/orders/:id/track - live driver position and ETA for the customer
+app.get('/api/orders/:id/track', async (req, res) => {
+  const db = await getDb();
+  const order = db.data.orders.find((o) => o.id === Number(req.params.id));
+  if (!order) return res.status(404).json({ error: 'Order not found.' });
+  const user = await getUserFromToken(db, req);
+  if (!canAccessOrder(order, user, req)) return res.status(403).json({ error: 'You cannot track this order.' });
+
+  // A driver's position is only ever exposed while they are actually carrying
+  // this customer's food.
+  if (order.status !== 'out_for_delivery') {
+    return res.json({ status: order.status, trackable: false, driver: null, destination: null, stopsAway: null, distanceKm: null, etaMinutes: null });
+  }
+
+  const driver = trackingDriver(db.data, order);
+  const fix = driverFix(driver);
+  if (!fix) {
+    return res.json({ status: order.status, trackable: false, driver: driver ? { name: driver.name, phone: driver.phone } : null, destination: null, stopsAway: null, distanceKm: null, etaMinutes: null });
+  }
+
+  const estimate = estimateArrival(db.data, order, fix);
+  res.json({
+    status: order.status,
+    trackable: true,
+    driver: { name: driver.name, phone: driver.phone, lat: fix.lat, lng: fix.lng, updatedAt: fix.at },
+    ...estimate
+  });
 });
 
 // PATCH /api/orders/:id/cancel - customer cancellation before fulfillment

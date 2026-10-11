@@ -32,6 +32,13 @@ export default function Privacy() {
           and the delivery status.
         </li>
         <li>
+          <strong>Delivery tracking</strong> — while your order is out for delivery, we
+          show you your delivery partner's live position, name and phone number so you
+          can follow the delivery and reach them. This stops the moment the order is
+          delivered. Our drivers share their position only while they are on a run, and
+          only from the delivery app with the screen open.
+        </li>
+        <li>
           <strong>Notification token</strong> — an anonymous device identifier issued by
           Google Firebase Cloud Messaging, so we can tell you when your order is
           confirmed, prepared or out for delivery. Removing the app or logging out

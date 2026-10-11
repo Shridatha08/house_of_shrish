@@ -783,3 +783,90 @@ test('completing a stop works for both orders and subscription meals', async () 
   const run = await app.request('get', '/api/driver/deliveries', {}, {}, driverAuth);
   assert.ok(run.body.stops.every((stop) => stop.delivered), 'completed stops drop out of the pending route');
 });
+
+function trackingFixture(status = 'out_for_delivery') {
+  const data = driverFixture();
+  data.orders = [{
+    id: 900, orderNumber: '900', userId: 1, status, paymentStatus: 'verified',
+    createdAt: now, scheduledDate: '2026-10-10',
+    items: [{ id: 1, name: 'Single Meal', price: 129, quantity: 1, customisation: 'Meal A' }],
+    customer: { ...customer, lat: 12.9800, lng: 77.6800 }
+  }];
+  return data;
+}
+
+test('a driver position is only shared while the food is actually out', async () => {
+  for (const status of ['paid', 'preparing', 'delivered']) {
+    const app = application(trackingFixture(status));
+    await app.request('post', '/api/driver/location', { lat: 12.9744, lng: 77.6743 }, {}, driverAuth);
+    const tracked = await app.request('get', '/api/orders/:id/track', {}, { id: '900' });
+    assert.equal(tracked.body.trackable, false, status);
+    assert.equal(tracked.body.driver, null, status);
+  }
+});
+
+test('tracking reports the driver, distance and an ETA', async () => {
+  const app = application(trackingFixture());
+  assert.equal((await app.request('post', '/api/driver/location', { lat: 12.9744, lng: 77.6743 }, {}, driverAuth)).code, 204);
+
+  const tracked = await app.request('get', '/api/orders/:id/track', {}, { id: '900' });
+  assert.equal(tracked.code, 200);
+  assert.equal(tracked.body.trackable, true);
+  assert.equal(tracked.body.driver.name, 'Ravi');
+  assert.equal(tracked.body.driver.lat, 12.9744);
+  assert.equal(tracked.body.driver.passwordHash, undefined);
+  assert.equal(tracked.body.destination.lat, 12.98);
+  assert.equal(tracked.body.destination.lng, 77.68);
+  assert.equal(tracked.body.stopsAway, 0);
+  assert.ok(tracked.body.distanceKm > 0 && tracked.body.distanceKm < 10);
+  assert.ok(tracked.body.etaMinutes >= 1 && tracked.body.etaMinutes < 120);
+});
+
+test('an ETA accounts for the stops queued ahead of this one', async () => {
+  const data = trackingFixture();
+  // A nearer stop the driver will reach first.
+  data.orders.push({
+    id: 901, orderNumber: '901', userId: 2, status: 'paid', paymentStatus: 'verified',
+    createdAt: now, scheduledDate: '2026-10-10',
+    items: [{ id: 1, name: 'Single Meal', price: 129, quantity: 1, customisation: 'Meal A' }],
+    customer: { ...customer, name: 'Nearer', lat: 12.9750, lng: 77.6750 }
+  });
+  const app = application(data);
+  await app.request('post', '/api/driver/location', { lat: 12.9744, lng: 77.6743 }, {}, driverAuth);
+
+  const tracked = await app.request('get', '/api/orders/:id/track', {}, { id: '900' });
+  assert.equal(tracked.body.stopsAway, 1, 'one delivery happens before this one');
+
+  const alone = application(trackingFixture());
+  await alone.request('post', '/api/driver/location', { lat: 12.9744, lng: 77.6743 }, {}, driverAuth);
+  const direct = await alone.request('get', '/api/orders/:id/track', {}, { id: '900' });
+  assert.ok(tracked.body.etaMinutes > direct.body.etaMinutes, 'queued stops push the ETA out');
+});
+
+test('a stale fix is treated as offline rather than shown frozen', async () => {
+  const app = application(trackingFixture());
+  await app.request('post', '/api/driver/location', { lat: 12.9744, lng: 77.6743 }, {}, driverAuth);
+  app.clock('2026-10-10T04:06:00Z');
+
+  const tracked = await app.request('get', '/api/orders/:id/track', {}, { id: '900' });
+  assert.equal(tracked.body.trackable, false);
+  assert.equal(tracked.body.driver, null);
+  assert.equal(tracked.body.etaMinutes, null);
+});
+
+test('tracking rejects strangers and bad coordinates', async () => {
+  const app = application(trackingFixture());
+  assert.equal((await app.request('get', '/api/orders/:id/track', {}, { id: '900' }, {})).code, 403);
+  assert.equal((await app.request('post', '/api/driver/location', { lat: 12.9, lng: 77.6 }, {}, {})).code, 401);
+  assert.equal((await app.request('post', '/api/driver/location', { lat: 999, lng: 77.6 }, {}, driverAuth)).code, 400);
+  assert.equal((await app.request('post', '/api/driver/location', {}, {}, driverAuth)).code, 400);
+});
+
+test('a driver can stop sharing their position', async () => {
+  const app = application(trackingFixture());
+  await app.request('post', '/api/driver/location', { lat: 12.9744, lng: 77.6743 }, {}, driverAuth);
+  assert.equal((await app.request('delete', '/api/driver/location', {}, {}, driverAuth)).code, 204);
+
+  const tracked = await app.request('get', '/api/orders/:id/track', {}, { id: '900' });
+  assert.equal(tracked.body.trackable, false);
+});
