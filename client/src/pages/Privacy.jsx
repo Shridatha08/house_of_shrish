@@ -35,8 +35,10 @@ export default function Privacy() {
           <strong>Delivery tracking</strong> — while your order is out for delivery, we
           show you your delivery partner's live position, name and phone number so you
           can follow the delivery and reach them. This stops the moment the order is
-          delivered. Our drivers share their position only while they are on a run, and
-          only from the delivery app with the screen open.
+          delivered. Our drivers share their position only while a delivery run is
+          active, from the delivery app, with a permanent notification on their phone
+          telling them it is on; they can switch it off at any time and it stops by
+          itself once the last delivery is done.
         </li>
         <li>
           <strong>Notification token</strong> — an anonymous device identifier issued by
