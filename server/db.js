@@ -310,6 +310,19 @@ async function applyWrites(client, database, operations) {
   }
 }
 
+// Keeps a copy of what an admin data reset is about to destroy, so a mistaken
+// erase is recoverable.
+export async function saveResetSnapshot(snapshot) {
+  const client = await getClient();
+  const collection = client.db(MONGODB_DB_NAME).collection('resetSnapshots');
+  const id = `reset-${new Date().toISOString()}`;
+  await collection.insertOne({ _id: id, ...snapshot });
+  // Keeping every snapshot forever would dwarf the live data.
+  const stale = await collection.find({}, { projection: { _id: 1 } }).sort({ _id: -1 }).skip(5).toArray();
+  if (stale.length > 0) await collection.deleteMany({ _id: { $in: stale.map((entry) => entry._id) } });
+  return id;
+}
+
 function rebase(baseline, operations) {
   for (const operation of operations) {
     if (operation.collection === 'settings') {

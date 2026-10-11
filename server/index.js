@@ -3,7 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
-import { getDb } from './db.js';
+import { getDb, saveResetSnapshot } from './db.js';
 import { notifyAdmins, notifyAllCustomers, notifyOrder, notifyUser, pushDiagnostics, registerDeviceToken, removeDeviceToken } from './push.js';
 
 const app = express();
@@ -1437,6 +1437,45 @@ app.delete('/api/admin/users/:id', async (req, res) => {
   }
   await db.write();
   res.status(204).end();
+});
+
+// POST /api/admin/reset - erase customer, driver and order history (requires admin key)
+app.post('/api/admin/reset', async (req, res) => {
+  if (req.headers['x-admin-key'] !== ADMIN_KEY) return res.status(403).json({ error: 'Invalid admin key.' });
+  if ((req.body || {}).confirm !== 'ERASE') {
+    return res.status(400).json({ error: 'Type ERASE to confirm this cannot be undone.' });
+  }
+
+  const db = await getDb();
+  const counts = {
+    orders: db.data.orders.length,
+    subscriptions: db.data.subscriptions.length,
+    users: db.data.users.length,
+    drivers: (db.data.drivers || []).length
+  };
+
+  const snapshotId = await saveResetSnapshot({
+    takenAt: new Date().toISOString(),
+    orders: db.data.orders,
+    subscriptions: db.data.subscriptions,
+    users: db.data.users,
+    drivers: db.data.drivers || [],
+    deviceTokens: db.data.deviceTokens || []
+  });
+
+  db.data.orders = [];
+  db.data.subscriptions = [];
+  db.data.users = [];
+  db.data.sessions = [];
+  db.data.passwordResetRequests = [];
+  db.data.drivers = [];
+  db.data.driverSessions = [];
+  // Admin devices keep their registration, or this console would go silent
+  // until someone reopened it.
+  db.data.deviceTokens = (db.data.deviceTokens || []).filter((entry) => entry.isAdmin);
+
+  await db.write();
+  res.json({ ...counts, snapshotId });
 });
 
 // GET /api/admin/password-reset-requests - list open reset requests

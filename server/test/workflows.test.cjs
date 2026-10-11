@@ -61,6 +61,7 @@ function application(data = fixture()) {  let state = structuredClone(data);
   let clock = new Date(now).getTime();
   const routes = new Map();
   const notifications = [];
+  const snapshots = [];
   const app = { use() {}, set() {}, listen() {} };
   for (const method of ['get', 'post', 'patch', 'delete']) {
     app[method] = (route, ...handlers) => routes.set(`${method}:${route}`, handlers.at(-1));
@@ -97,6 +98,10 @@ function application(data = fixture()) {  let state = structuredClone(data);
       // Mirrors the real adapter: a write lands record by record, so requests
       // touching different records do not overwrite each other.
       return { data: snapshot, write: async () => { state = mergeRecords(state, base, snapshot); } };
+    },
+    saveResetSnapshot: async (snapshot) => {
+      snapshots.push(snapshot);
+      return `reset-${snapshots.length}`;
     }
   };
   vm.createContext(context);
@@ -105,6 +110,7 @@ function application(data = fixture()) {  let state = structuredClone(data);
     context,
     state: () => state,
     notifications,
+    snapshots,
     clock: (value) => { clock = new Date(value).getTime(); },
     async request(method, route, body = {}, params = {}, headers = { authorization: 'Bearer user-token' }) {
       const response = { code: 200, status(code) { this.code = code; return this; }, json(value) { this.body = value; return this; }, end() { return this; } };
@@ -963,4 +969,78 @@ test('one customer cannot block another', async () => {
 
   assert.equal((await guest('9222222222')).code, 201, 'a different guest is unaffected');
   assert.equal((await purchase(app)).code, 201, 'and so is a signed-in customer');
+});
+
+function populated() {
+  const data = driverFixture();
+  data.orders = [{
+    id: 900, orderNumber: '900', userId: 1, status: 'delivered', paymentStatus: 'verified',
+    createdAt: now, items: [{ id: 1, name: 'Single Meal', price: 129, quantity: 1, customisation: 'Meal A' }],
+    customer: { ...customer }
+  }];
+  data.subscriptions = [{ id: 'sub-1', userId: 1, approved: true, itemName: 'Monthly (Lunch)', startDate: '2026-10-10', workingDaysRequired: 5, skippedMeals: [] }];
+  data.deviceTokens = [
+    { token: 'c'.repeat(32), userId: 1, isAdmin: false },
+    { token: 'd'.repeat(32), isAdmin: true }
+  ];
+  return data;
+}
+
+test('the admin data reset clears history but keeps the menu and settings', async () => {
+  const app = application(populated());
+  const before = app.state();
+  assert.ok(before.orders.length > 0 && before.users.length > 0);
+
+  const wiped = await app.request('post', '/api/admin/reset', { confirm: 'ERASE' }, {}, adminHeaders);
+  assert.equal(wiped.code, 200);
+  assert.equal(wiped.body.orders, 1);
+  assert.equal(wiped.body.users, 1);
+  assert.equal(wiped.body.drivers, 1);
+
+  const after = app.state();
+  assert.equal(after.orders.length, 0);
+  assert.equal(after.subscriptions.length, 0);
+  assert.equal(after.users.length, 0);
+  assert.equal(after.sessions.length, 0);
+  assert.equal(after.drivers.length, 0);
+  assert.equal(after.driverSessions.length, 0);
+
+  // Configuration is not data and must survive.
+  assert.equal(after.menu.length, before.menu.length);
+  assert.equal(after.settings.subscriptionWorkingDays, before.settings.subscriptionWorkingDays);
+  assert.equal(after.holidays.length, before.holidays.length);
+});
+
+test('a reset keeps the admin console subscribed to notifications', async () => {
+  const app = application(populated());
+  await app.request('post', '/api/admin/reset', { confirm: 'ERASE' }, {}, adminHeaders);
+
+  const tokens = app.state().deviceTokens;
+  assert.equal(tokens.length, 1);
+  assert.equal(tokens[0].isAdmin, true, 'customer tokens go, the admin device stays');
+});
+
+test('a reset snapshots what it is about to destroy', async () => {
+  const app = application(populated());
+  const wiped = await app.request('post', '/api/admin/reset', { confirm: 'ERASE' }, {}, adminHeaders);
+
+  assert.match(wiped.body.snapshotId, /^reset-/);
+  assert.equal(app.snapshots.length, 1);
+  assert.equal(app.snapshots[0].orders.length, 1);
+  assert.equal(app.snapshots[0].users.length, 1);
+  assert.equal(app.snapshots[0].drivers.length, 1);
+});
+
+test('a reset needs the admin key and the typed confirmation', async () => {
+  const app = application(populated());
+
+  assert.equal((await app.request('post', '/api/admin/reset', { confirm: 'ERASE' }, {}, {})).code, 403);
+  assert.equal((await app.request('post', '/api/admin/reset', {}, {}, adminHeaders)).code, 400);
+  assert.equal((await app.request('post', '/api/admin/reset', { confirm: 'erase' }, {}, adminHeaders)).code, 400);
+  assert.equal((await app.request('post', '/api/admin/reset', { confirm: 'yes' }, {}, adminHeaders)).code, 400);
+
+  // Nothing was touched by any of the rejected attempts.
+  assert.equal(app.state().orders.length, 1);
+  assert.equal(app.state().users.length, 1);
+  assert.equal(app.snapshots.length, 0);
 });
