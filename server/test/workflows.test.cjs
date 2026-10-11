@@ -7,7 +7,9 @@ const crypto = require('node:crypto');
 
 const source = fs.readFileSync(path.join(__dirname, '../index.js'), 'utf8');
 const dbSource = fs.readFileSync(path.join(__dirname, '../db.js'), 'utf8');
-const customer = { name: 'Test Customer', phone: '9000000000', address: 'Test Street', flatNumber: 'A-12', pincode: '560075' };
+// Lives beside the kitchen, so meal orders are in range by default.
+const customer = { name: 'Test Customer', phone: '9000000000', address: 'Test Street', flatNumber: 'A-12', pincode: '560075', lat: 12.9744, lng: 77.6743 };
+const unpinnedCustomer = { name: 'Test Customer', phone: '9000000000', address: 'Test Street', flatNumber: 'A-12', pincode: '560075' };
 const now = '2026-10-10T04:00:00Z';
 
 function fixture() {
@@ -622,4 +624,31 @@ test('promotional broadcasts validate content and reach only customers', async (
   assert.equal(promo.title, 'Weekend offer');
   assert.equal(promo.body, '20% off ladoos');
   assert.equal(promo.data.type, 'promotion');
+});
+
+test('meals are limited to the delivery radius; sweets are not', async () => {
+  const app = application();
+  const nearby = { ...customer, lat: 12.9744, lng: 77.6743 };           // at the kitchen
+  const farAway = { ...customer, lat: 12.9716, lng: 77.5946 };          // ~9km away
+  const meal = [{ id: 1, quantity: 1, customisation: 'Meal A' }];
+  const ladoo = [{ id: 6, quantity: 1, customisation: '200g' }];
+
+  const denied = await app.request('post', '/api/orders', { items: meal, customer: farAway }, {}, {});
+  assert.equal(denied.code, 409);
+  assert.equal(denied.body.error, 'Sorry Unavailable in your area. We are working to deliver soon!');
+
+  assert.equal((await app.request('post', '/api/orders', { items: meal, customer: nearby }, {}, {})).code, 201);
+
+  // Sweets ship anywhere, with or without a pin.
+  assert.equal((await app.request('post', '/api/orders', { items: ladoo, customer: farAway }, {}, {})).code, 201);
+  assert.equal((await app.request('post', '/api/orders', { items: ladoo, customer: unpinnedCustomer }, {}, {})).code, 201);
+
+  // A meal without any pin cannot be range-checked, so it is refused.
+  const unpinned = await app.request('post', '/api/orders', { items: meal, customer: unpinnedCustomer }, {}, {});
+  assert.equal(unpinned.code, 400);
+  assert.match(unpinned.body.error, /Pin your delivery location/);
+
+  // A mixed cart is held to the stricter rule.
+  const mixed = await app.request('post', '/api/orders', { items: [...meal, ...ladoo], customer: farAway }, {}, {});
+  assert.equal(mixed.body.error, 'Sorry Unavailable in your area. We are working to deliver soon!');
 });

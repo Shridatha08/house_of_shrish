@@ -12,6 +12,12 @@ if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
 
 const UPI_ID = 'houseofshrish@ybl';
 const MERCHANT_NAME = 'House of Shrish';
+
+// Malleshpalya kitchen. Override with env vars to set an exact rooftop pin.
+const KITCHEN_LAT = Number(process.env.KITCHEN_LAT ?? 12.9744129);
+const KITCHEN_LNG = Number(process.env.KITCHEN_LNG ?? 77.6743533);
+const DELIVERY_RADIUS_KM = Number(process.env.DELIVERY_RADIUS_KM ?? 4);
+const OUT_OF_RANGE_MESSAGE = 'Sorry Unavailable in your area. We are working to deliver soon!';
 const ADMIN_KEY = process.env.ADMIN_KEY;
 if (!ADMIN_KEY) throw new Error('ADMIN_KEY environment variable is required.');
 
@@ -106,6 +112,22 @@ function readCoordinates(source) {
     return { ok: false };
   }
   return { ok: true, lat, lng };
+}
+
+// Great-circle distance in km.
+function distanceFromKitchenKm(lat, lng) {
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const earthRadiusKm = 6371;
+  const dLat = toRad(lat - KITCHEN_LAT);
+  const dLng = toRad(lng - KITCHEN_LNG);
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(KITCHEN_LAT)) * Math.cos(toRad(lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * earthRadiusKm * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+// Meals are cooked fresh and hand-delivered; sweets ship anywhere.
+function requiresLocalDelivery(menuItem) {
+  return menuItem?.category === 'Pure Veg Meals';
 }
 
 function validDeliveryDetails(details) {
@@ -689,7 +711,10 @@ app.get('/api/store-config', async (req, res) => {
     lunchCutoffTime: settings.lunchCutoffTime,
     dinnerCutoffTime: settings.dinnerCutoffTime,
     deliveryTimeSlots: settings.deliveryTimeSlots,
-    dailyOrderCapacity: settings.dailyOrderCapacity
+    dailyOrderCapacity: settings.dailyOrderCapacity,
+    kitchenLat: KITCHEN_LAT,
+    kitchenLng: KITCHEN_LNG,
+    deliveryRadiusKm: DELIVERY_RADIUS_KM
   });
 });
 
@@ -1145,6 +1170,18 @@ app.post('/api/orders', async (req, res) => {
   const today = todayISTStr();
   if (settings.kitchenClosedDates.includes(today)) return res.status(409).json({ error: 'The kitchen is closed today.' });
   const menuById = new Map(db.data.menu.map((item) => [item.id, item]));
+
+  // Meals are delivered from the kitchen, so they are limited by distance.
+  // Sweets are not, and a sweets-only order needs no pin at all.
+  const needsLocalDelivery = items.some((line) => requiresLocalDelivery(menuById.get(Number(line.id))));
+  if (needsLocalDelivery) {
+    if (customer.lat == null || customer.lng == null) {
+      return res.status(400).json({ error: 'Pin your delivery location on the map to order meals.' });
+    }
+    if (distanceFromKitchenKm(customer.lat, customer.lng) > DELIVERY_RADIUS_KM) {
+      return res.status(409).json({ error: OUT_OF_RANGE_MESSAGE });
+    }
+  }
   const cutoffExempt = items.every((line) => {
     const menuItem = menuById.get(Number(line.id));
     return menuItem && (menuItem.name.toLowerCase().startsWith('monthly') || menuItem.id === 6);
