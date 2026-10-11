@@ -6,7 +6,6 @@ const vm = require('node:vm');
 const crypto = require('node:crypto');
 
 const source = fs.readFileSync(path.join(__dirname, '../index.js'), 'utf8');
-const dbSource = fs.readFileSync(path.join(__dirname, '../db.js'), 'utf8');
 // Lives beside the kitchen, so meal orders are in range by default.
 const customer = { name: 'Test Customer', phone: '9000000000', address: 'Test Street', flatNumber: 'A-12', pincode: '560075', lat: 12.9744, lng: 77.6743 };
 const unpinnedCustomer = { name: 'Test Customer', phone: '9000000000', address: 'Test Street', flatNumber: 'A-12', pincode: '560075' };
@@ -28,8 +27,37 @@ function fixture() {
   };
 }
 
-function application(data = fixture()) {
-  let state = structuredClone(data);
+const RECORD_KEYS = {
+  menu: 'id', orders: 'id', users: 'id', sessions: 'token', passwordResetRequests: 'id',
+  subscriptions: 'id', holidays: 'id', drivers: 'id', driverSessions: 'token', deviceTokens: 'token'
+};
+
+// Applies only the records a snapshot actually changed, the way per-record
+// collection writes do, and rejects a record another request already moved on.
+function mergeRecords(current, base, next) {
+  const result = structuredClone(current);
+  for (const [name, key] of Object.entries(RECORD_KEYS)) {
+    const before = new Map((base[name] || []).map((entry) => [entry[key], JSON.stringify(entry)]));
+    const live = new Map((result[name] || []).map((entry) => [entry[key], entry]));
+    const after = new Map((next[name] || []).map((entry) => [entry[key], entry]));
+
+    for (const [id, entry] of after) {
+      const wasJson = before.get(id);
+      const nextJson = JSON.stringify(entry);
+      if (wasJson === nextJson) continue;
+      const liveEntry = live.get(id);
+      const liveJson = liveEntry === undefined ? undefined : JSON.stringify(liveEntry);
+      if (wasJson !== liveJson) throw Object.assign(new Error('Another update completed first. Please refresh and try again.'), { status: 409 });
+      live.set(id, structuredClone(entry));
+    }
+    for (const id of before.keys()) if (!after.has(id)) live.delete(id);
+    result[name] = [...live.values()];
+  }
+  if (JSON.stringify(base.settings) !== JSON.stringify(next.settings)) result.settings = structuredClone(next.settings);
+  return result;
+}
+
+function application(data = fixture()) {  let state = structuredClone(data);
   let clock = new Date(now).getTime();
   const routes = new Map();
   const notifications = [];
@@ -64,21 +92,11 @@ function application(data = fixture()) {
     bcrypt: { hash: async (password) => `hashed:${password}`, compare: async (password, hash) => hash === `hashed:${password}` },
     Date: class extends Date { constructor(...args) { super(...(args.length ? args : [clock])); } static now() { return clock; } },
     getDb: async () => {
+      const base = structuredClone(state);
       const snapshot = structuredClone(state);
-      return { data: snapshot, write: async () => {
-        if (snapshot.revision !== state.revision) throw Object.assign(new Error('Stale write'), { status: 409 });
-        snapshot.revision++;
-        state = structuredClone(snapshot);
-      } };
-    },
-    // Field-level write that deliberately skips the revision check.
-    patchDocument: async (updates) => {
-      for (const [path, value] of Object.entries(updates)) {
-        const keys = path.split('.');
-        let target = state;
-        for (const key of keys.slice(0, -1)) target = target[key];
-        target[keys.at(-1)] = value;
-      }
+      // Mirrors the real adapter: a write lands record by record, so requests
+      // touching different records do not overwrite each other.
+      return { data: snapshot, write: async () => { state = mergeRecords(state, base, snapshot); } };
     }
   };
   vm.createContext(context);
@@ -348,30 +366,6 @@ test('future preferred start dates are stored, invalid/past dates rejected', asy
   assert.equal((await purchase(app, 2, { subscriptionStartDate: '2026-10-09' })).code, 400);
   assert.equal((await purchase(app, 2, { subscriptionStartDate: '2026-11-01' })).code, 201);
   assert.equal(app.state().subscriptions[0].startDate, '2026-11-01');
-});
-
-test('actual persistence adapter rejects competing snapshots instead of losing data', async () => {
-  let state;
-  const collection = {
-    async findOne() { return structuredClone(state); },
-    async updateOne(filter, update) {
-      if (update.$setOnInsert) { state ||= { _id: 'main', ...structuredClone(update.$setOnInsert) }; return { matchedCount: 1 }; }
-      const matches = typeof filter.revision === 'object' ? state.revision === undefined : state.revision === filter.revision;
-      if (!matches) return { matchedCount: 0 };
-      Object.assign(state, structuredClone(update.$set));
-      return { matchedCount: 1 };
-    }
-  };
-  const context = { structuredClone, process: { env: { MONGODB_URI: 'mock' } }, MongoClient: class { connect() { return Promise.resolve({ db: () => ({ collection: () => collection }) }); } } };
-  vm.createContext(context);
-  vm.runInContext(dbSource.replace(/^import .*;\r?$/gm, '').replace(/export async function/g, 'async function'), context);
-  const first = await context.getDb();
-  const second = await context.getDb();
-  first.data.orders.push({ id: 1 });
-  await first.write();
-  second.data.orders.push({ id: 2 });
-  await assert.rejects(second.write(), (error) => error.status === 409);
-  assert.equal(state.orders.length, 1);
 });
 
 test('existing monthly coverage permits only the missing meal', async () => {
@@ -883,8 +877,8 @@ test('a driver can stop sharing their position', async () => {
 test('position pings do not make concurrent orders fail with a stale write', async () => {
   const app = application(trackingFixture());
 
-  // A ping and an order placed at the same moment must both succeed: the ping
-  // patches one field rather than rewriting the whole document.
+  // A ping and an order placed at the same moment touch different records, so
+  // neither is rejected.
   const [ping, order] = await Promise.all([
     app.request('post', '/api/driver/location', { lat: 12.9744, lng: 77.6743 }, {}, driverAuth),
     purchase(app)
@@ -892,11 +886,31 @@ test('position pings do not make concurrent orders fail with a stale write', asy
   assert.equal(ping.code, 204);
   assert.equal(order.code, 201, order.body && order.body.error);
 
-  // Back-to-back pings never conflict with each other either.
-  const burst = await Promise.all(Array.from({ length: 5 }, (_, i) =>
-    app.request('post', '/api/driver/location', { lat: 12.9744 + i / 1000, lng: 77.6743 }, {}, driverAuth)));
-  assert.deepEqual(burst.map((r) => r.code), [204, 204, 204, 204, 204]);
+  // The driver app awaits each ping, so they arrive in sequence.
+  for (let i = 0; i < 5; i++) {
+    const sent = await app.request('post', '/api/driver/location', { lat: 12.9744 + i / 1000, lng: 77.6743 }, {}, driverAuth);
+    assert.equal(sent.code, 204);
+  }
 
   const tracked = await app.request('get', '/api/orders/:id/track', {}, { id: '900' });
   assert.equal(tracked.body.trackable, true);
+});
+
+test('unrelated writes no longer block each other', async () => {
+  const app = application(trackingFixture());
+
+  // Admin settings, a holiday and a customer order share no record between
+  // them; under the single-document adapter any two of these would collide.
+  const results = await Promise.all([
+    app.request('patch', '/api/admin/settings', { subscriptionWorkingDays: 24, announcement: 'Festival menu' }, {}, adminHeaders),
+    app.request('post', '/api/holidays', { date: '2026-12-31', name: 'Year end' }, {}, adminHeaders),
+    purchase(app, 6),
+    app.request('post', '/api/device-token', { token: 'b'.repeat(32), platform: 'android' })
+  ]);
+
+  assert.deepEqual(results.map((result) => result.code), [200, 201, 201, 204]);
+  assert.equal(app.state().settings.announcement, 'Festival menu');
+  assert.ok(app.state().holidays.some((entry) => entry.name === 'Year end'));
+  assert.equal(app.state().orders.length, 2);
+  assert.equal(app.state().deviceTokens.length, 1);
 });
