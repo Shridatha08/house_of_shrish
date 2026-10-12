@@ -228,6 +228,8 @@ function optimiseRoute(stops, origin = { lat: KITCHEN_LAT, lng: KITCHEN_LNG }) {
 // subscription meals, which are delivered without an order being placed.
 function buildRunStops(data, today) {
   const usersById = new Map(data.users.map((entry) => [entry.id, entry]));
+  const menuById = new Map(data.menu.map((item) => [item.id, item]));
+  const isSweet = (item) => menuById.get(item.id)?.category === 'Artisanal Sweets';
   const stops = [];
 
   for (const order of data.orders) {
@@ -247,6 +249,8 @@ function buildRunStops(data, today) {
       lat: order.customer.lat ?? null,
       lng: order.customer.lng ?? null,
       items: order.items.map((item) => `${item.quantity}× ${item.name}`),
+      // Lets the driver app load and run lunch, dinner and sweets separately.
+      group: order.mealService || (order.items.every(isSweet) ? 'sweets' : 'other'),
       status: order.status,
       delivered: order.status === 'delivered'
     });
@@ -274,6 +278,7 @@ function buildRunStops(data, today) {
         lat: customer.lat ?? null,
         lng: customer.lng ?? null,
         items: [`1× ${meal.meal === 'dinner' ? 'Dinner' : 'Lunch'}${subscription.customisation ? ` · ${subscription.customisation}` : ''}`],
+        group: meal.meal,
         status: alreadyDelivered ? 'delivered' : 'pending',
         delivered: alreadyDelivered
       });

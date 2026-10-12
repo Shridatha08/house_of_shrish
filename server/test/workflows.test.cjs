@@ -1238,3 +1238,67 @@ test('the older skipped flag still works for installed admin builds', async () =
     { date: '2026-10-10', meal: 'lunch', status: 'eaten' }, { id: 'sub-eshwar' }, adminHeaders);
   assert.equal(bad.code, 400);
 });
+
+test('the run labels each stop as lunch, dinner or sweets', async () => {
+  const data = driverFixture();
+  data.users = [
+    { ...customer, id: 1, passwordHash: 'x', lat: 12.9744, lng: 77.6743 },
+    { ...customer, id: 2, name: 'Sweets Only', phone: '9000000002', passwordHash: 'x', lat: 12.9750, lng: 77.6750 }
+  ];
+  data.orders = [
+    {
+      id: 901, orderNumber: '901', userId: 2, status: 'paid', paymentStatus: 'verified',
+      createdAt: now, scheduledDate: '2026-10-10', mealService: 'lunch',
+      items: [{ id: 1, name: 'Single Meal', price: 129, quantity: 1, customisation: 'Meal A' }],
+      customer: { ...customer, lat: 12.9750, lng: 77.6750 }
+    },
+    {
+      id: 902, orderNumber: '902', userId: 2, status: 'paid', paymentStatus: 'verified',
+      createdAt: now, scheduledDate: '2026-10-10', mealService: 'dinner',
+      items: [{ id: 1, name: 'Single Meal', price: 129, quantity: 1, customisation: 'Meal B' }],
+      customer: { ...customer, lat: 12.9751, lng: 77.6751 }
+    },
+    {
+      id: 903, orderNumber: '903', userId: 2, status: 'paid', paymentStatus: 'verified',
+      createdAt: now, scheduledDate: '2026-10-10', mealService: null,
+      items: [{ id: 6, name: 'Dry Fruits Ladoo', price: 299, quantity: 2, customisation: '200g' }],
+      customer: { ...customer, lat: 12.9752, lng: 77.6752 }
+    }
+  ];
+  data.subscriptions = [{
+    id: 'sub-1', userId: 1, approved: true, itemName: 'Monthly (Lunch + Dinner)',
+    startDate: '2026-10-10', workingDaysRequired: 5, skippedMeals: []
+  }];
+
+  const app = application(data);
+  const run = await app.request('get', '/api/driver/deliveries', {}, {}, driverAuth);
+  const groupOf = (id) => run.body.stops.find((stop) => stop.id === id).group;
+
+  assert.equal(groupOf('901'), 'lunch');
+  assert.equal(groupOf('902'), 'dinner');
+  assert.equal(groupOf('903'), 'sweets', 'a sweets-only order is not a meal run');
+
+  const subscriptionStops = run.body.stops.filter((stop) => stop.kind === 'subscription');
+  assert.equal(subscriptionStops.length, 2);
+  assert.equal(subscriptionStops.filter((stop) => stop.group === 'lunch').length, 1);
+  assert.equal(subscriptionStops.filter((stop) => stop.group === 'dinner').length, 1);
+
+  // Every stop is labelled, so none can vanish from a grouped list.
+  assert.equal(run.body.stops.every((stop) => typeof stop.group === 'string' && stop.group), true);
+});
+
+test('an order mixing a meal and sweets rides with its meal slot', async () => {
+  const data = driverFixture();
+  data.orders = [{
+    id: 904, orderNumber: '904', userId: 1, status: 'paid', paymentStatus: 'verified',
+    createdAt: now, scheduledDate: '2026-10-10', mealService: 'dinner',
+    items: [
+      { id: 1, name: 'Single Meal', price: 129, quantity: 1, customisation: 'Meal A' },
+      { id: 6, name: 'Dry Fruits Ladoo', price: 299, quantity: 1, customisation: '200g' }
+    ],
+    customer: { ...customer }
+  }];
+  const app = application(data);
+  const run = await app.request('get', '/api/driver/deliveries', {}, {}, driverAuth);
+  assert.equal(run.body.stops.find((stop) => stop.id === '904').group, 'dinner');
+});
