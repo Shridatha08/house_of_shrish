@@ -540,8 +540,11 @@ function buildSubscriptionSchedule(subscription, holidays) {
   const carryForwardDeadline = subscriptionCarryForwardDeadline(subscription.startDate, originalEndDate, holidays);
 
   const skipped = new Set((subscription.skippedMeals || []).map((entry) => `${entry.date}:${entry.meal}`));
+  const delivered = new Set((subscription.deliveredMeals || []).map((entry) => `${entry.date}:${entry.meal}`));
   const requiredMeals = requiredDays * mealSlots.length;
-  let deliveredMeals = 0;
+  // Counts meals placed on the calendar, which is not the same as the meals the
+  // driver has actually handed over.
+  let scheduledMeals = 0;
   const schedule = [];
   const cursor = new Date(`${subscription.startDate}T00:00:00Z`);
   let endDate = null;
@@ -552,18 +555,18 @@ function buildSubscriptionSchedule(subscription, holidays) {
     if (date > carryForwardDeadline) break;
     if (isWorkingDay(date, holidays)) {
       for (const meal of mealSlots) {
-        if (deliveredMeals >= requiredMeals) break;
-        const isSkipped = skipped.has(`${date}:${meal}`);
-        if (isSkipped) {
+        if (scheduledMeals >= requiredMeals) break;
+        const key = `${date}:${meal}`;
+        if (skipped.has(key)) {
           schedule.push({ date, meal, status: 'skipped', canCancel: false });
           continue;
         }
-        const status = date < today ? 'elapsed' : 'upcoming';
+        const status = delivered.has(key) ? 'delivered' : date < today ? 'elapsed' : 'upcoming';
         schedule.push({ date, meal, status, canCancel: status === 'upcoming' && canCancelSubscriptionMeal(date, meal) });
-        deliveredMeals++;
+        scheduledMeals++;
         endDate = date;
       }
-      if (deliveredMeals >= requiredMeals) break;
+      if (scheduledMeals >= requiredMeals) break;
     }
     cursor.setUTCDate(cursor.getUTCDate() + 1);
   }
@@ -571,7 +574,7 @@ function buildSubscriptionSchedule(subscription, holidays) {
   const upcomingEntries = schedule.filter((entry) => entry.status === 'upcoming');
   const daysRemaining = new Set(upcomingEntries.map((entry) => entry.date)).size;
   const remainingMeals = upcomingEntries.length;
-  const mealsBeyondDeadline = Math.max(0, requiredMeals - deliveredMeals);
+  const mealsBeyondDeadline = Math.max(0, requiredMeals - scheduledMeals);
   if (mealsBeyondDeadline > 0) endDate = carryForwardDeadline;
   return {
     mealSlots,

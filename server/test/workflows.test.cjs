@@ -1133,3 +1133,44 @@ test('entitlement is counted in meals, so a subscription can end mid-day', async
   assert.equal(finalDay.length, 1, 'the last day carries a single meal');
   assert.equal(finalDay[0].meal, 'lunch', 'and it is the first slot of that day');
 });
+
+test('a delivered meal stops counting as still owed', async () => {
+  const data = subscriptionFixture();
+  data.subscriptions[0].workingDaysRequired = 3;
+  const app = application(data);
+  const driverData = app.state();
+  assert.ok(driverData);
+
+  const before = (await app.request('get', '/api/admin/subscriptions', {}, {}, adminHeaders)).body[0];
+  assert.equal(before.remainingMeals, 6);
+
+  // The driver hands over both of today's meals.
+  const today = '2026-10-10';
+  app.state().subscriptions[0].deliveredMeals = [
+    { date: today, meal: 'lunch', deliveredAt: now },
+    { date: today, meal: 'dinner', deliveredAt: now }
+  ];
+
+  const after = (await app.request('get', '/api/admin/subscriptions', {}, {}, adminHeaders)).body[0];
+  assert.equal(after.remainingMeals, 4, 'delivered meals are no longer outstanding');
+
+  const todayEntries = after.schedule.filter((entry) => entry.date === today);
+  assert.equal(todayEntries.map((entry) => entry.status).join(','), 'delivered,delivered');
+  assert.equal(todayEntries.every((entry) => entry.canCancel === false), true, 'a delivered meal cannot be skipped');
+});
+
+test('delivered meals still consume entitlement rather than extending it', async () => {
+  const data = subscriptionFixture();
+  data.subscriptions[0].workingDaysRequired = 3;
+  data.subscriptions[0].deliveredMeals = [{ date: '2026-10-10', meal: 'lunch', deliveredAt: now }];
+  const app = application(data);
+
+  const sub = (await app.request('get', '/api/admin/subscriptions', {}, {}, adminHeaders)).body[0];
+  assert.equal(sub.schedule.filter((entry) => entry.status !== 'skipped').length, 6);
+  assert.equal(sub.remainingMeals, 5);
+  // Unlike a skip, a delivery must not push the end date out.
+  const untouched = application(subscriptionFixture());
+  untouched.state().subscriptions[0].workingDaysRequired = 3;
+  const baseline = (await untouched.request('get', '/api/admin/subscriptions', {}, {}, adminHeaders)).body[0];
+  assert.equal(sub.endDate, baseline.endDate);
+});
