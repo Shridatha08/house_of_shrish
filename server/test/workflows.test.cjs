@@ -1174,3 +1174,67 @@ test('delivered meals still consume entitlement rather than extending it', async
   const baseline = (await untouched.request('get', '/api/admin/subscriptions', {}, {}, adminHeaders)).body[0];
   assert.equal(sub.endDate, baseline.endDate);
 });
+
+test('the kitchen can record a delivery the driver did not log', async () => {
+  const data = subscriptionFixture();
+  data.subscriptions[0].workingDaysRequired = 3;
+  const app = application(data);
+
+  const result = await app.request('post', '/api/admin/subscriptions/:id/meal',
+    { date: '2026-10-10', meal: 'lunch', status: 'delivered' }, { id: 'sub-eshwar' }, adminHeaders);
+  assert.equal(result.code, 200);
+  assert.equal(app.state().subscriptions[0].deliveredMeals.length, 1);
+
+  const sub = (await app.request('get', '/api/admin/subscriptions', {}, {}, adminHeaders)).body[0];
+  assert.equal(sub.schedule.find((e) => e.date === '2026-10-10' && e.meal === 'lunch').status, 'delivered');
+  assert.equal(sub.remainingMeals, 5, 'one fewer meal owed');
+});
+
+test('a meal moves cleanly between delivered, skipped and pending', async () => {
+  const app = application(subscriptionFixture());
+  const set = (status) => app.request('post', '/api/admin/subscriptions/:id/meal',
+    { date: '2026-10-10', meal: 'dinner', status }, { id: 'sub-eshwar' }, adminHeaders);
+  const state = () => app.state().subscriptions[0];
+
+  await set('skipped');
+  assert.equal(state().skippedMeals.length, 1);
+  assert.equal((state().deliveredMeals || []).length, 0);
+
+  // Switching must not leave the meal recorded in both places.
+  await set('delivered');
+  assert.equal(state().skippedMeals.length, 0);
+  assert.equal(state().deliveredMeals.length, 1);
+
+  await set('pending');
+  assert.equal(state().skippedMeals.length, 0);
+  assert.equal(state().deliveredMeals.length, 0);
+});
+
+test('a meal cannot be marked delivered before it happens', async () => {
+  const app = application(subscriptionFixture());
+  const future = await app.request('post', '/api/admin/subscriptions/:id/meal',
+    { date: '2026-11-30', meal: 'lunch', status: 'delivered' }, { id: 'sub-eshwar' }, adminHeaders);
+  assert.equal(future.code, 400);
+  assert.match(future.body.error, /cannot be marked delivered/);
+  assert.equal((app.state().subscriptions[0].deliveredMeals || []).length, 0);
+
+  // Writing one off ahead of time is fine; the customer may have told us.
+  const skip = await app.request('post', '/api/admin/subscriptions/:id/meal',
+    { date: '2026-11-30', meal: 'lunch', status: 'skipped' }, { id: 'sub-eshwar' }, adminHeaders);
+  assert.equal(skip.code, 200);
+});
+
+test('the older skipped flag still works for installed admin builds', async () => {
+  const app = application(subscriptionFixture());
+  await app.request('post', '/api/admin/subscriptions/:id/meal',
+    { date: '2026-10-10', meal: 'lunch', skipped: true }, { id: 'sub-eshwar' }, adminHeaders);
+  assert.equal(app.state().subscriptions[0].skippedMeals.length, 1);
+
+  await app.request('post', '/api/admin/subscriptions/:id/meal',
+    { date: '2026-10-10', meal: 'lunch', skipped: false }, { id: 'sub-eshwar' }, adminHeaders);
+  assert.equal(app.state().subscriptions[0].skippedMeals.length, 0);
+
+  const bad = await app.request('post', '/api/admin/subscriptions/:id/meal',
+    { date: '2026-10-10', meal: 'lunch', status: 'eaten' }, { id: 'sub-eshwar' }, adminHeaders);
+  assert.equal(bad.code, 400);
+});

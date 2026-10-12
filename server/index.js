@@ -1395,21 +1395,30 @@ app.post('/api/admin/subscriptions/:id/meal', async (req, res) => {
   const subscription = db.data.subscriptions.find((s) => s.id === req.params.id);
   if (!subscription) return res.status(404).json({ error: 'Subscription not found.' });
 
-  const { date, meal, skipped } = req.body || {};
+  const { date, meal, skipped, status } = req.body || {};
   if (!isValidDateString(date) || !['lunch', 'dinner'].includes(meal)) {
     return res.status(400).json({ error: 'Choose a valid date and meal.' });
   }
-  if (typeof skipped !== 'boolean') {
-    return res.status(400).json({ error: 'Specify whether the meal was skipped.' });
+  // `skipped` is the older two-state form kept for installed admin builds.
+  const next = status ?? (skipped === true ? 'skipped' : skipped === false ? 'pending' : undefined);
+  if (!['delivered', 'skipped', 'pending'].includes(next)) {
+    return res.status(400).json({ error: 'Set the meal to delivered, skipped or pending.' });
   }
   if (date < subscription.startDate) {
     return res.status(400).json({ error: 'That date is before the subscription started.' });
   }
+  if (next === 'delivered' && date > todayISTStr()) {
+    return res.status(400).json({ error: 'A meal cannot be marked delivered before its date.' });
+  }
 
-  const others = (subscription.skippedMeals || []).filter((entry) => !(entry.date === date && entry.meal === meal));
-  subscription.skippedMeals = skipped
-    ? [...others, { date, meal, cancelledAt: new Date().toISOString(), byAdmin: true }]
-    : others;
+  const now = new Date().toISOString();
+  subscription.skippedMeals = (subscription.skippedMeals || []).filter((entry) => !(entry.date === date && entry.meal === meal));
+  subscription.deliveredMeals = (subscription.deliveredMeals || []).filter((entry) => !(entry.date === date && entry.meal === meal));
+  if (next === 'skipped') {
+    subscription.skippedMeals.push({ date, meal, cancelledAt: now, byAdmin: true });
+  } else if (next === 'delivered') {
+    subscription.deliveredMeals.push({ date, meal, deliveredAt: now, byAdmin: true });
+  }
   await db.write();
 
   res.json({ ...subscription, ...buildSubscriptionSchedule(subscription, subscriptionHolidays(db.data)) });
