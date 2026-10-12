@@ -1381,6 +1381,37 @@ app.patch('/api/admin/subscriptions/:id', async (req, res) => {
   res.json({ ...subscription, ...buildSubscriptionSchedule(subscription, subscriptionHolidays(db.data)) });
 });
 
+// POST /api/admin/subscriptions/:id/meal - correct a past or missed meal.
+// A customer's own skip is bound by same-day cutoffs, but the kitchen needs to
+// fix a delivery that never happened, and that is always in the past.
+app.post('/api/admin/subscriptions/:id/meal', async (req, res) => {
+  if (req.headers['x-admin-key'] !== ADMIN_KEY) {
+    return res.status(403).json({ error: 'Invalid admin key.' });
+  }
+  const db = await getDb();
+  const subscription = db.data.subscriptions.find((s) => s.id === req.params.id);
+  if (!subscription) return res.status(404).json({ error: 'Subscription not found.' });
+
+  const { date, meal, skipped } = req.body || {};
+  if (!isValidDateString(date) || !['lunch', 'dinner'].includes(meal)) {
+    return res.status(400).json({ error: 'Choose a valid date and meal.' });
+  }
+  if (typeof skipped !== 'boolean') {
+    return res.status(400).json({ error: 'Specify whether the meal was skipped.' });
+  }
+  if (date < subscription.startDate) {
+    return res.status(400).json({ error: 'That date is before the subscription started.' });
+  }
+
+  const others = (subscription.skippedMeals || []).filter((entry) => !(entry.date === date && entry.meal === meal));
+  subscription.skippedMeals = skipped
+    ? [...others, { date, meal, cancelledAt: new Date().toISOString(), byAdmin: true }]
+    : others;
+  await db.write();
+
+  res.json({ ...subscription, ...buildSubscriptionSchedule(subscription, subscriptionHolidays(db.data)) });
+});
+
 // PATCH /api/admin/subscriptions/:id/approve - make a pending subscription visible to the user (requires admin key)
 app.patch('/api/admin/subscriptions/:id/approve', async (req, res) => {
   if (req.headers['x-admin-key'] !== ADMIN_KEY) {

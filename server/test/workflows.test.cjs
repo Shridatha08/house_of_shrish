@@ -1044,3 +1044,70 @@ test('a reset needs the admin key and the typed confirmation', async () => {
   assert.equal(app.state().users.length, 1);
   assert.equal(app.snapshots.length, 0);
 });
+
+function subscriptionFixture() {
+  const data = fixture();
+  data.subscriptions = [{
+    id: 'sub-eshwar', userId: 1, approved: true, itemName: 'Monthly (Lunch + Dinner)',
+    startDate: '2026-10-10', workingDaysRequired: 26, skippedMeals: [], customisation: 'Meal A'
+  }];
+  return data;
+}
+
+test('the kitchen can write off a meal the customer never received', async () => {
+  const app = application(subscriptionFixture());
+  // 10 Oct 2026 is a Saturday, so both meals were scheduled that day.
+  const before = await app.request('get', '/api/admin/subscriptions', {}, {}, adminHeaders);
+  const day = before.body[0].schedule.filter((entry) => entry.date === '2026-10-10');
+  assert.equal(day.map((entry) => entry.meal).join(','), 'lunch,dinner');
+
+  for (const meal of ['lunch', 'dinner']) {
+    const result = await app.request('post', '/api/admin/subscriptions/:id/meal',
+      { date: '2026-10-10', meal, skipped: true }, { id: 'sub-eshwar' }, adminHeaders);
+    assert.equal(result.code, 200);
+  }
+
+  const after = await app.request('get', '/api/admin/subscriptions', {}, {}, adminHeaders);
+  const corrected = after.body[0];
+  assert.equal(
+    corrected.schedule.filter((e) => e.date === '2026-10-10').map((e) => e.status).join(','),
+    'skipped,skipped'
+  );
+  // Nothing is lost: the meals move to the end instead.
+  assert.ok(corrected.endDate > before.body[0].endDate, 'the subscription runs longer');
+  assert.equal(corrected.remainingMeals, before.body[0].remainingMeals);
+});
+
+test('a written-off meal can be restored', async () => {
+  const app = application(subscriptionFixture());
+  await app.request('post', '/api/admin/subscriptions/:id/meal',
+    { date: '2026-10-10', meal: 'dinner', skipped: true }, { id: 'sub-eshwar' }, adminHeaders);
+  assert.equal(app.state().subscriptions[0].skippedMeals.length, 1);
+
+  await app.request('post', '/api/admin/subscriptions/:id/meal',
+    { date: '2026-10-10', meal: 'dinner', skipped: false }, { id: 'sub-eshwar' }, adminHeaders);
+  assert.equal(app.state().subscriptions[0].skippedMeals.length, 0);
+});
+
+test('marking the same meal twice does not double count it', async () => {
+  const app = application(subscriptionFixture());
+  for (let i = 0; i < 3; i++) {
+    await app.request('post', '/api/admin/subscriptions/:id/meal',
+      { date: '2026-10-10', meal: 'lunch', skipped: true }, { id: 'sub-eshwar' }, adminHeaders);
+  }
+  assert.equal(app.state().subscriptions[0].skippedMeals.length, 1);
+});
+
+test('meal corrections are validated and admin-only', async () => {
+  const app = application(subscriptionFixture());
+  const call = (body, headers = adminHeaders) =>
+    app.request('post', '/api/admin/subscriptions/:id/meal', body, { id: 'sub-eshwar' }, headers);
+
+  assert.equal((await call({ date: '2026-10-10', meal: 'lunch', skipped: true }, {})).code, 403);
+  assert.equal((await call({ date: 'nonsense', meal: 'lunch', skipped: true })).code, 400);
+  assert.equal((await call({ date: '2026-10-10', meal: 'brunch', skipped: true })).code, 400);
+  assert.equal((await call({ date: '2026-10-10', meal: 'lunch' })).code, 400);
+  // Before the subscription even began.
+  assert.equal((await call({ date: '2026-10-01', meal: 'lunch', skipped: true })).code, 400);
+  assert.equal(app.state().subscriptions[0].skippedMeals.length, 0);
+});
