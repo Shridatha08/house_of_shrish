@@ -1111,3 +1111,25 @@ test('meal corrections are validated and admin-only', async () => {
   assert.equal((await call({ date: '2026-10-01', meal: 'lunch', skipped: true })).code, 400);
   assert.equal(app.state().subscriptions[0].skippedMeals.length, 0);
 });
+
+test('entitlement is counted in meals, so a subscription can end mid-day', async () => {
+  const data = subscriptionFixture();
+  data.subscriptions[0].workingDaysRequired = 3; // 6 meals for lunch + dinner
+  const app = application(data);
+
+  const full = (await app.request('get', '/api/admin/subscriptions', {}, {}, adminHeaders)).body[0];
+  const lastDay = full.schedule.filter((entry) => entry.date === full.endDate);
+  assert.equal(lastDay.length, 2, 'an even entitlement ends on a whole day');
+
+  // Writing off a single meal leaves an odd number to serve.
+  await app.request('post', '/api/admin/subscriptions/:id/meal',
+    { date: '2026-10-10', meal: 'dinner', skipped: true }, { id: 'sub-eshwar' }, adminHeaders);
+
+  const odd = (await app.request('get', '/api/admin/subscriptions', {}, {}, adminHeaders)).body[0];
+  const served = odd.schedule.filter((entry) => entry.status !== 'skipped');
+  assert.equal(served.length, 6, 'still six meals owed');
+
+  const finalDay = odd.schedule.filter((entry) => entry.date === odd.endDate && entry.status !== 'skipped');
+  assert.equal(finalDay.length, 1, 'the last day carries a single meal');
+  assert.equal(finalDay[0].meal, 'lunch', 'and it is the first slot of that day');
+});
