@@ -1302,3 +1302,82 @@ test('an order mixing a meal and sweets rides with its meal slot', async () => {
   const run = await app.request('get', '/api/driver/deliveries', {}, {}, driverAuth);
   assert.equal(run.body.stops.find((stop) => stop.id === '904').group, 'dinner');
 });
+
+test('a kitchen failure carries the meal forward and buys back the days to serve it', async () => {
+  const app = application(subscriptionFixture());
+  const before = (await app.request('get', '/api/admin/subscriptions', {}, {}, adminHeaders)).body[0];
+
+  // Today's lunch could not be cooked; dinner went out as normal.
+  const result = await app.request('post', '/api/admin/subscriptions/:id/meal',
+    { date: '2026-10-10', meal: 'lunch', status: 'maintenance' }, { id: 'sub-eshwar' }, adminHeaders);
+  assert.equal(result.code, 200);
+
+  const after = (await app.request('get', '/api/admin/subscriptions', {}, {}, adminHeaders)).body[0];
+  assert.equal(
+    after.schedule.find((e) => e.date === '2026-10-10' && e.meal === 'lunch').status,
+    'maintenance'
+  );
+  assert.equal(after.remainingMeals, before.remainingMeals, 'the meal is still owed');
+  assert.ok(
+    after.carryForwardDeadline > before.carryForwardDeadline,
+    'the deadline moves out, unlike a customer skip'
+  );
+  assert.equal(after.mealsBeyondDeadline, 0, 'so nothing falls off the end');
+});
+
+test('a customer skip does not move the deadline', async () => {
+  const app = application(subscriptionFixture());
+  const before = (await app.request('get', '/api/admin/subscriptions', {}, {}, adminHeaders)).body[0];
+
+  await app.request('post', '/api/admin/subscriptions/:id/meal',
+    { date: '2026-10-10', meal: 'lunch', status: 'skipped' }, { id: 'sub-eshwar' }, adminHeaders);
+
+  const after = (await app.request('get', '/api/admin/subscriptions', {}, {}, adminHeaders)).body[0];
+  assert.equal(after.carryForwardDeadline, before.carryForwardDeadline);
+});
+
+test('the deadline grows by delivery days, not calendar days', async () => {
+  const app = application(subscriptionFixture());
+  const before = (await app.request('get', '/api/admin/subscriptions', {}, {}, adminHeaders)).body[0];
+
+  // A whole day lost on a lunch + dinner plan is two meals, so one day back.
+  for (const meal of ['lunch', 'dinner']) {
+    await app.request('post', '/api/admin/subscriptions/:id/meal',
+      { date: '2026-10-10', meal, status: 'maintenance' }, { id: 'sub-eshwar' }, adminHeaders);
+  }
+  const oneDay = (await app.request('get', '/api/admin/subscriptions', {}, {}, adminHeaders)).body[0];
+
+  // Losing only one more meal still needs another whole day to serve it in.
+  await app.request('post', '/api/admin/subscriptions/:id/meal',
+    { date: '2026-10-12', meal: 'lunch', status: 'maintenance' }, { id: 'sub-eshwar' }, adminHeaders);
+  const twoDays = (await app.request('get', '/api/admin/subscriptions', {}, {}, adminHeaders)).body[0];
+
+  assert.ok(oneDay.carryForwardDeadline > before.carryForwardDeadline);
+  assert.ok(twoDays.carryForwardDeadline > oneDay.carryForwardDeadline);
+  // The extension must land on a delivery day.
+  assert.notEqual(new Date(`${twoDays.carryForwardDeadline}T00:00:00Z`).getUTCDay(), 0);
+});
+
+test('a meal moves cleanly between maintenance and the other states', async () => {
+  const app = application(subscriptionFixture());
+  const set = (status) => app.request('post', '/api/admin/subscriptions/:id/meal',
+    { date: '2026-10-10', meal: 'lunch', status }, { id: 'sub-eshwar' }, adminHeaders);
+  const sub = () => app.state().subscriptions[0];
+
+  await set('maintenance');
+  assert.equal(sub().maintenanceMeals.length, 1);
+  assert.equal(sub().skippedMeals.length, 0);
+
+  await set('skipped');
+  assert.equal(sub().maintenanceMeals.length, 0, 'not recorded as both');
+  assert.equal(sub().skippedMeals.length, 1);
+
+  await set('delivered');
+  assert.equal(sub().maintenanceMeals.length, 0);
+  assert.equal(sub().skippedMeals.length, 0);
+  assert.equal(sub().deliveredMeals.length, 1);
+
+  await set('pending');
+  assert.equal(sub().maintenanceMeals.length, 0);
+  assert.equal(sub().deliveredMeals.length, 0);
+});

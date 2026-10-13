@@ -511,7 +511,9 @@ function canCancelSubscriptionMeal(date, meal) {
   return hour * 60 + minute < cutoffHour * 60;
 }
 
-function subscriptionCarryForwardDeadline(startDate, originalEndDate, holidays) {
+// Holidays and kitchen failures both cost the customer delivery days they did
+// not choose to lose, so each pushes the deadline out.
+function subscriptionCarryForwardDeadline(startDate, originalEndDate, holidays, extraWorkingDays = 0) {
   const original = new Date(`${originalEndDate}T00:00:00Z`);
   const monthStart = new Date(Date.UTC(original.getUTCFullYear(), original.getUTCMonth() + 1, 1));
   const lastDay = new Date(Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() + 1, 0)).getUTCDate();
@@ -524,6 +526,13 @@ function subscriptionCarryForwardDeadline(startDate, originalEndDate, holidays) 
   for (const date of holidayDates) {
     if (date > deadline.toISOString().slice(0, 10)) break;
     deadline.setUTCDate(deadline.getUTCDate() + 1);
+  }
+  // Counted in working days: a Sunday on the end would deliver nothing.
+  let remaining = Math.max(0, extraWorkingDays);
+  let guard = 0;
+  while (remaining > 0 && guard++ < 400) {
+    deadline.setUTCDate(deadline.getUTCDate() + 1);
+    if (isWorkingDay(deadline.toISOString().slice(0, 10), holidays)) remaining--;
   }
   return deadline.toISOString().slice(0, 10);
 }
@@ -542,10 +551,18 @@ function buildSubscriptionSchedule(subscription, holidays) {
   if (!originalEndDate) {
     return { mealSlots, schedule: [], endDate: null, daysRemaining: 0, remainingMeals: 0, expiresToday: false, expired: true };
   }
-  const carryForwardDeadline = subscriptionCarryForwardDeadline(subscription.startDate, originalEndDate, holidays);
-
   const skipped = new Set((subscription.skippedMeals || []).map((entry) => `${entry.date}:${entry.meal}`));
   const delivered = new Set((subscription.deliveredMeals || []).map((entry) => `${entry.date}:${entry.meal}`));
+  // A meal the kitchen could not serve. Carried forward like a skip, but it
+  // also buys back the delivery days needed to fit it in.
+  const maintenance = new Set((subscription.maintenanceMeals || []).map((entry) => `${entry.date}:${entry.meal}`));
+  const carryForwardDeadline = subscriptionCarryForwardDeadline(
+    subscription.startDate,
+    originalEndDate,
+    holidays,
+    Math.ceil(maintenance.size / mealSlots.length)
+  );
+
   const requiredMeals = requiredDays * mealSlots.length;
   // Counts meals placed on the calendar, which is not the same as the meals the
   // driver has actually handed over.
@@ -562,6 +579,10 @@ function buildSubscriptionSchedule(subscription, holidays) {
       for (const meal of mealSlots) {
         if (scheduledMeals >= requiredMeals) break;
         const key = `${date}:${meal}`;
+        if (maintenance.has(key)) {
+          schedule.push({ date, meal, status: 'maintenance', canCancel: false });
+          continue;
+        }
         if (skipped.has(key)) {
           schedule.push({ date, meal, status: 'skipped', canCancel: false });
           continue;
@@ -1406,8 +1427,8 @@ app.post('/api/admin/subscriptions/:id/meal', async (req, res) => {
   }
   // `skipped` is the older two-state form kept for installed admin builds.
   const next = status ?? (skipped === true ? 'skipped' : skipped === false ? 'pending' : undefined);
-  if (!['delivered', 'skipped', 'pending'].includes(next)) {
-    return res.status(400).json({ error: 'Set the meal to delivered, skipped or pending.' });
+  if (!['delivered', 'skipped', 'maintenance', 'pending'].includes(next)) {
+    return res.status(400).json({ error: 'Set the meal to delivered, skipped, maintenance or pending.' });
   }
   if (date < subscription.startDate) {
     return res.status(400).json({ error: 'That date is before the subscription started.' });
@@ -1419,10 +1440,13 @@ app.post('/api/admin/subscriptions/:id/meal', async (req, res) => {
   const now = new Date().toISOString();
   subscription.skippedMeals = (subscription.skippedMeals || []).filter((entry) => !(entry.date === date && entry.meal === meal));
   subscription.deliveredMeals = (subscription.deliveredMeals || []).filter((entry) => !(entry.date === date && entry.meal === meal));
+  subscription.maintenanceMeals = (subscription.maintenanceMeals || []).filter((entry) => !(entry.date === date && entry.meal === meal));
   if (next === 'skipped') {
     subscription.skippedMeals.push({ date, meal, cancelledAt: now, byAdmin: true });
   } else if (next === 'delivered') {
     subscription.deliveredMeals.push({ date, meal, deliveredAt: now, byAdmin: true });
+  } else if (next === 'maintenance') {
+    subscription.maintenanceMeals.push({ date, meal, recordedAt: now, byAdmin: true });
   }
   await db.write();
 
