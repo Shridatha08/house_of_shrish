@@ -1453,6 +1453,59 @@ app.post('/api/admin/subscriptions/:id/meal', async (req, res) => {
   res.json({ ...subscription, ...buildSubscriptionSchedule(subscription, subscriptionHolidays(db.data)) });
 });
 
+// POST /api/admin/subscriptions/maintenance - a kitchen-wide failure, applied
+// to every subscriber due that meal. Marking them one by one invites missing
+// someone on the day it matters most.
+app.post('/api/admin/subscriptions/maintenance', async (req, res) => {
+  if (req.headers['x-admin-key'] !== ADMIN_KEY) {
+    return res.status(403).json({ error: 'Invalid admin key.' });
+  }
+  const { date, meals } = req.body || {};
+  if (!isValidDateString(date)) {
+    return res.status(400).json({ error: 'Date must be in YYYY-MM-DD format.' });
+  }
+  if (!Array.isArray(meals) || meals.length === 0 || !meals.every((meal) => ['lunch', 'dinner'].includes(meal))) {
+    return res.status(400).json({ error: 'Choose lunch, dinner or both.' });
+  }
+  if (date > todayISTStr()) {
+    return res.status(400).json({ error: 'A kitchen issue cannot be recorded for a future day.' });
+  }
+
+  const db = await getDb();
+  const holidays = subscriptionHolidays(db.data);
+  const now = new Date().toISOString();
+  const affected = [];
+
+  for (const subscription of db.data.subscriptions) {
+    if (!subscriptionInService(subscription, db.data)) continue;
+    const { schedule } = buildSubscriptionSchedule(subscription, holidays);
+    const applied = [];
+    for (const meal of meals) {
+      const entry = schedule.find((item) => item.date === date && item.meal === meal);
+      // Already skipped, delivered or recorded: leave it alone. A customer who
+      // skipped today was never expecting the meal.
+      if (!entry || !['upcoming', 'elapsed'].includes(entry.status)) continue;
+      subscription.maintenanceMeals ||= [];
+      subscription.maintenanceMeals.push({ date, meal, recordedAt: now, byAdmin: true });
+      applied.push(meal);
+    }
+    if (applied.length > 0) affected.push({ subscription, meals: applied });
+  }
+
+  await db.write();
+
+  for (const { subscription, meals: applied } of affected) {
+    const label = applied.length === 2 ? 'meals' : applied[0];
+    await notifyUser(db, subscription.userId, {
+      title: 'Your meal has been added back',
+      body: `We could not deliver today's ${label}. It has been added back to your plan and your end date has moved out.`,
+      data: { type: 'subscription_maintenance', subscriptionId: subscription.id, date }
+    });
+  }
+
+  res.json({ date, meals, subscriptions: affected.length });
+});
+
 // PATCH /api/admin/subscriptions/:id/approve - make a pending subscription visible to the user (requires admin key)
 app.patch('/api/admin/subscriptions/:id/approve', async (req, res) => {
   if (req.headers['x-admin-key'] !== ADMIN_KEY) {

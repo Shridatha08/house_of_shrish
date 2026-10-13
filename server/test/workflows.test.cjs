@@ -1381,3 +1381,81 @@ test('a meal moves cleanly between maintenance and the other states', async () =
   assert.equal(sub().maintenanceMeals.length, 0);
   assert.equal(sub().deliveredMeals.length, 0);
 });
+
+function kitchenWideFixture() {
+  const data = fixture();
+  data.users = [
+    { ...customer, id: 1, passwordHash: 'x' },
+    { ...customer, id: 2, name: 'Second', phone: '9000000002', passwordHash: 'x' },
+    { ...customer, id: 3, name: 'Third', phone: '9000000003', passwordHash: 'x' }
+  ];
+  data.subscriptions = [
+    { id: 'sub-a', userId: 1, approved: true, itemName: 'Monthly (Lunch + Dinner)', startDate: '2026-10-10', workingDaysRequired: 26, skippedMeals: [] },
+    { id: 'sub-b', userId: 2, approved: true, itemName: 'Monthly (Lunch)', startDate: '2026-10-10', workingDaysRequired: 26, skippedMeals: [] },
+    { id: 'sub-c', userId: 3, approved: true, itemName: 'Monthly (Dinner)', startDate: '2026-10-10', workingDaysRequired: 26, skippedMeals: [] }
+  ];
+  return data;
+}
+
+const maintenanceCall = (app, body) =>
+  app.request('post', '/api/admin/subscriptions/maintenance', body, {}, adminHeaders);
+
+test('a kitchen-wide failure reaches every subscriber due that meal', async () => {
+  const app = application(kitchenWideFixture());
+  const result = await maintenanceCall(app, { date: '2026-10-10', meals: ['lunch'] });
+
+  assert.equal(result.code, 200);
+  assert.equal(result.body.subscriptions, 2, 'the two lunch plans, not the dinner-only one');
+
+  const byId = new Map(app.state().subscriptions.map((s) => [s.id, s]));
+  assert.equal(byId.get('sub-a').maintenanceMeals.length, 1);
+  assert.equal(byId.get('sub-b').maintenanceMeals.length, 1);
+  assert.equal((byId.get('sub-c').maintenanceMeals || []).length, 0, 'dinner-only plan untouched');
+});
+
+test('it leaves alone anyone who had already skipped or been served', async () => {
+  const data = kitchenWideFixture();
+  data.subscriptions[0].skippedMeals = [{ date: '2026-10-10', meal: 'lunch' }];
+  data.subscriptions[1].deliveredMeals = [{ date: '2026-10-10', meal: 'lunch' }];
+  const app = application(data);
+
+  const result = await maintenanceCall(app, { date: '2026-10-10', meals: ['lunch'] });
+  assert.equal(result.body.subscriptions, 0);
+
+  const byId = new Map(app.state().subscriptions.map((s) => [s.id, s]));
+  // A customer who skipped must not be handed a free deadline extension.
+  assert.equal((byId.get('sub-a').maintenanceMeals || []).length, 0);
+  assert.equal(byId.get('sub-a').skippedMeals.length, 1);
+  assert.equal((byId.get('sub-b').maintenanceMeals || []).length, 0);
+});
+
+test('running it twice does not double count', async () => {
+  const app = application(kitchenWideFixture());
+  await maintenanceCall(app, { date: '2026-10-10', meals: ['lunch'] });
+  const second = await maintenanceCall(app, { date: '2026-10-10', meals: ['lunch'] });
+
+  assert.equal(second.body.subscriptions, 0);
+  assert.equal(app.state().subscriptions[0].maintenanceMeals.length, 1);
+});
+
+test('both meals can be reported at once, and customers are told', async () => {
+  const app = application(kitchenWideFixture());
+  const result = await maintenanceCall(app, { date: '2026-10-10', meals: ['lunch', 'dinner'] });
+
+  assert.equal(result.body.subscriptions, 3, 'every plan lost something');
+  assert.equal(app.state().subscriptions[0].maintenanceMeals.length, 2);
+
+  const told = app.notifications.filter((n) => n.data?.type === 'subscription_maintenance');
+  assert.equal(told.length, 3);
+  assert.match(told[0].body, /added back to your plan/);
+});
+
+test('the bulk report is validated and admin-only', async () => {
+  const app = application(kitchenWideFixture());
+  assert.equal((await app.request('post', '/api/admin/subscriptions/maintenance', { date: '2026-10-10', meals: ['lunch'] }, {}, {})).code, 403);
+  assert.equal((await maintenanceCall(app, { date: 'nope', meals: ['lunch'] })).code, 400);
+  assert.equal((await maintenanceCall(app, { date: '2026-10-10', meals: [] })).code, 400);
+  assert.equal((await maintenanceCall(app, { date: '2026-10-10', meals: ['brunch'] })).code, 400);
+  assert.equal((await maintenanceCall(app, { date: '2026-12-25', meals: ['lunch'] })).code, 400, 'not for a future day');
+  assert.equal((app.state().subscriptions[0].maintenanceMeals || []).length, 0);
+});
