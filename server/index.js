@@ -252,6 +252,9 @@ function buildRunStops(data, today) {
       // Lets the driver app load and run lunch, dinner and sweets separately.
       group: order.mealService || (order.items.every(isSweet) ? 'sweets' : 'other'),
       status: order.status,
+      stage: order.status === 'delivered'
+        ? 'delivered'
+        : order.status === 'out_for_delivery' ? 'out_for_delivery' : 'pending',
       delivered: order.status === 'delivered'
     });
   }
@@ -264,8 +267,10 @@ function buildRunStops(data, today) {
     const customer = usersById.get(subscription.userId);
     if (!customer) continue;
     const deliveredMeals = subscription.deliveredMeals || [];
+    const enRoute = subscription.outForDeliveryMeals || [];
     for (const meal of dueToday) {
       const alreadyDelivered = deliveredMeals.some((entry) => entry.date === meal.date && entry.meal === meal.meal);
+      const alreadyOut = enRoute.some((entry) => entry.date === meal.date && entry.meal === meal.meal);
       stops.push({
         kind: 'subscription',
         id: `${subscription.id}:${meal.date}:${meal.meal}`,
@@ -280,6 +285,7 @@ function buildRunStops(data, today) {
         items: [`1× ${meal.meal === 'dinner' ? 'Dinner' : 'Lunch'}${subscription.customisation ? ` · ${subscription.customisation}` : ''}`],
         group: meal.meal,
         status: alreadyDelivered ? 'delivered' : 'pending',
+        stage: alreadyDelivered ? 'delivered' : alreadyOut ? 'out_for_delivery' : 'pending',
         delivered: alreadyDelivered
       });
     }
@@ -1015,42 +1021,130 @@ app.get('/api/driver/deliveries', async (req, res) => {
   });
 });
 
-// POST /api/driver/deliveries/:id/delivered - complete a stop
+// Moves a stop to out-for-delivery and then to delivered. The second step is
+// refused until the first has happened, so a stop cannot be closed without the
+// customer having been told it was on its way.
+async function advanceStop(db, driver, stopId, stage) {
+  const [subscriptionId, date, meal] = stopId.split(':');
+  const now = new Date().toISOString();
+  const mealLabel = meal === 'dinner' ? 'dinner' : 'lunch';
+
+  if (date && meal) {
+    const subscription = db.data.subscriptions.find((entry) => entry.id === subscriptionId);
+    if (!subscription) return { code: 404, error: 'Delivery not found.' };
+    subscription.outForDeliveryMeals ||= [];
+    subscription.deliveredMeals ||= [];
+    const matches = (entry) => entry.date === date && entry.meal === meal;
+
+    if (subscription.deliveredMeals.some(matches)) {
+      return { code: 409, error: 'That meal is already delivered.', alreadyDone: true };
+    }
+
+    if (stage === 'out_for_delivery') {
+      if (subscription.outForDeliveryMeals.some(matches)) return { code: 204 };
+      subscription.outForDeliveryMeals.push({ date, meal, at: now, driverId: driver.id });
+      await db.write();
+      await notifyUser(db, subscription.userId, {
+        title: 'On the way',
+        body: `Your ${mealLabel} is out for delivery.`,
+        data: { type: 'subscription_status', subscriptionId: subscription.id, date, meal, status: 'out_for_delivery' }
+      });
+      await notifyAdmins(db, {
+        title: 'On the way',
+        body: `${subscription.itemName} ${mealLabel} left for its stop.`,
+        data: { type: 'delivery_progress', subscriptionId: subscription.id, date, meal, status: 'out_for_delivery' }
+      });
+      return { code: 204 };
+    }
+
+    if (!subscription.outForDeliveryMeals.some(matches)) {
+      return { code: 409, error: 'Mark the meal out for delivery first.' };
+    }
+    subscription.deliveredMeals.push({ date, meal, deliveredAt: now, driverId: driver.id });
+    await db.write();
+    await notifyUser(db, subscription.userId, {
+      title: 'Delivered',
+      body: `Your ${mealLabel} has been delivered. Enjoy your meal!`,
+      data: { type: 'subscription_status', subscriptionId: subscription.id, date, meal, status: 'delivered' }
+    });
+    await notifyAdmins(db, {
+      title: 'Delivered',
+      body: `${subscription.itemName} ${mealLabel} delivered.`,
+      data: { type: 'delivery_progress', subscriptionId: subscription.id, date, meal, status: 'delivered' }
+    });
+    return { code: 204 };
+  }
+
+  const order = db.data.orders.find((entry) => entry.id === Number(stopId));
+  if (!order) return { code: 404, error: 'Delivery not found.' };
+
+  if (stage === 'out_for_delivery') {
+    if (order.status === 'out_for_delivery') return { code: 204 };
+    if (!['paid', 'preparing'].includes(order.status)) {
+      return { code: 409, error: 'This order cannot go out for delivery.' };
+    }
+    order.status = 'out_for_delivery';
+  } else {
+    if (order.status === 'delivered') {
+      return { code: 409, error: 'That order is already delivered.', alreadyDone: true };
+    }
+    if (order.status !== 'out_for_delivery') {
+      return { code: 409, error: 'Mark the order out for delivery first.' };
+    }
+    order.status = 'delivered';
+    order.deliveredBy = driver.id;
+  }
+  order.statusUpdatedAt = now;
+  order.driverId = driver.id;
+  await db.write();
+
+  const announcement = stage === 'delivered'
+    ? ['Delivered', `Order #${order.orderNumber} has been delivered. Enjoy your meal!`]
+    : ['On the way', `Order #${order.orderNumber} is out for delivery.`];
+  await notifyOrder(db, order, {
+    title: announcement[0],
+    body: announcement[1],
+    data: { type: 'order_status', orderId: order.id, status: order.status }
+  });
+  await notifyAdmins(db, {
+    title: announcement[0],
+    body: `#${order.orderNumber} · ${order.customer.name}`,
+    data: { type: 'delivery_progress', orderId: order.id, status: order.status }
+  });
+  return { code: 204 };
+}
+
+// POST /api/driver/deliveries/:id/stage - advance a stop one step
+app.post('/api/driver/deliveries/:id/stage', async (req, res) => {
+  const db = await getDb();
+  const driver = getDriverFromToken(db.data, req);
+  if (!driver) return res.status(401).json({ error: 'Not signed in.' });
+
+  const stage = (req.body || {}).stage;
+  if (!['out_for_delivery', 'delivered'].includes(stage)) {
+    return res.status(400).json({ error: 'Stage must be out_for_delivery or delivered.' });
+  }
+
+  const result = await advanceStop(db, driver, String(req.params.id), stage);
+  if (result.error) return res.status(result.code).json({ error: result.error });
+  res.status(204).end();
+});
+
+// POST /api/driver/deliveries/:id/delivered - one-step completion, kept for
+// driver builds released before the out-for-delivery step existed.
 app.post('/api/driver/deliveries/:id/delivered', async (req, res) => {
   const db = await getDb();
   const driver = getDriverFromToken(db.data, req);
   if (!driver) return res.status(401).json({ error: 'Not signed in.' });
 
   const stopId = String(req.params.id);
-  const [subscriptionId, date, meal] = stopId.split(':');
+  const enRoute = await advanceStop(db, driver, stopId, 'out_for_delivery');
+  if (enRoute.code === 404) return res.status(404).json({ error: enRoute.error });
 
-  if (date && meal) {
-    const subscription = db.data.subscriptions.find((entry) => entry.id === subscriptionId);
-    if (!subscription) return res.status(404).json({ error: 'Delivery not found.' });
-    subscription.deliveredMeals ||= [];
-    const already = subscription.deliveredMeals.some((entry) => entry.date === date && entry.meal === meal);
-    if (!already) {
-      subscription.deliveredMeals.push({ date, meal, deliveredAt: new Date().toISOString(), driverId: driver.id });
-      await db.write();
-    }
-    return res.status(204).end();
-  }
-
-  const order = db.data.orders.find((entry) => entry.id === Number(stopId));
-  if (!order) return res.status(404).json({ error: 'Delivery not found.' });
-  if (!['paid', 'preparing', 'out_for_delivery'].includes(order.status)) {
-    return res.status(409).json({ error: 'This order is not out for delivery.' });
-  }
-  order.status = 'delivered';
-  order.statusUpdatedAt = new Date().toISOString();
-  order.deliveredBy = driver.id;
-  await db.write();
-
-  await notifyOrder(db, order, {
-    title: 'Delivered',
-    body: `Order #${order.orderNumber} has been delivered. Enjoy your meal!`,
-    data: { type: 'order_status', orderId: order.id, status: 'delivered' }
-  });
+  const result = await advanceStop(db, driver, stopId, 'delivered');
+  // The old endpoint was idempotent; repeating it must stay harmless.
+  if (result.alreadyDone) return res.status(204).end();
+  if (result.error) return res.status(result.code).json({ error: result.error });
   res.status(204).end();
 });
 

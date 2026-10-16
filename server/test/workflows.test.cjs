@@ -93,11 +93,17 @@ function application(data = fixture()) {  let state = structuredClone(data);
     bcrypt: { hash: async (password) => `hashed:${password}`, compare: async (password, hash) => hash === `hashed:${password}` },
     Date: class extends Date { constructor(...args) { super(...(args.length ? args : [clock])); } static now() { return clock; } },
     getDb: async () => {
-      const base = structuredClone(state);
+      let base = structuredClone(state);
       const snapshot = structuredClone(state);
-      // Mirrors the real adapter: a write lands record by record, so requests
-      // touching different records do not overwrite each other.
-      return { data: snapshot, write: async () => { state = mergeRecords(state, base, snapshot); } };
+      // Mirrors the real adapter: a write lands record by record, and rebases
+      // afterwards so one handler can write more than once.
+      return {
+        data: snapshot,
+        write: async () => {
+          state = mergeRecords(state, base, snapshot);
+          base = structuredClone(snapshot);
+        }
+      };
     },
     saveResetSnapshot: async (snapshot) => {
       snapshots.push(snapshot);
@@ -1458,4 +1464,110 @@ test('the bulk report is validated and admin-only', async () => {
   assert.equal((await maintenanceCall(app, { date: '2026-10-10', meals: ['brunch'] })).code, 400);
   assert.equal((await maintenanceCall(app, { date: '2026-12-25', meals: ['lunch'] })).code, 400, 'not for a future day');
   assert.equal((app.state().subscriptions[0].maintenanceMeals || []).length, 0);
+});
+
+function runFixture() {
+  const data = driverFixture();
+  data.users = [{ ...customer, id: 1, passwordHash: 'x', lat: 12.9744, lng: 77.6743 }];
+  data.orders = [{
+    id: 950, orderNumber: '950', userId: 1, status: 'paid', paymentStatus: 'verified',
+    createdAt: now, scheduledDate: '2026-10-10', mealService: 'lunch',
+    items: [{ id: 1, name: 'Single Meal', price: 129, quantity: 1, customisation: 'Meal A' }],
+    customer: { ...customer }
+  }];
+  data.subscriptions = [{
+    id: 'sub-run', userId: 1, approved: true, itemName: 'Monthly (Lunch)',
+    startDate: '2026-10-10', workingDaysRequired: 5, skippedMeals: []
+  }];
+  return data;
+}
+
+const stage = (app, id, value) =>
+  app.request('post', '/api/driver/deliveries/:id/stage', { stage: value }, { id }, driverAuth);
+const stopById = async (app, id) => {
+  const run = await app.request('get', '/api/driver/deliveries', {}, {}, driverAuth);
+  return run.body.stops.find((entry) => entry.id === id);
+};
+
+test('an order cannot be delivered before it goes out for delivery', async () => {
+  const app = application(runFixture());
+  assert.equal((await stopById(app, '950')).stage, 'pending');
+
+  const early = await stage(app, '950', 'delivered');
+  assert.equal(early.code, 409);
+  assert.match(early.body.error, /out for delivery first/);
+  assert.equal(app.state().orders[0].status, 'paid', 'nothing changed');
+
+  assert.equal((await stage(app, '950', 'out_for_delivery')).code, 204);
+  assert.equal((await stopById(app, '950')).stage, 'out_for_delivery');
+
+  assert.equal((await stage(app, '950', 'delivered')).code, 204);
+  assert.equal(app.state().orders[0].status, 'delivered');
+});
+
+test('a subscription meal follows the same two steps', async () => {
+  const app = application(runFixture());
+  const id = 'sub-run:2026-10-10:lunch';
+  assert.equal((await stopById(app, id)).stage, 'pending');
+
+  const early = await stage(app, id, 'delivered');
+  assert.equal(early.code, 409);
+  assert.equal((app.state().subscriptions[0].deliveredMeals || []).length, 0);
+
+  await stage(app, id, 'out_for_delivery');
+  assert.equal((await stopById(app, id)).stage, 'out_for_delivery');
+  assert.equal(app.state().subscriptions[0].outForDeliveryMeals.length, 1);
+
+  await stage(app, id, 'delivered');
+  assert.equal(app.state().subscriptions[0].deliveredMeals.length, 1);
+  assert.equal((await stopById(app, id)).stage, 'delivered');
+});
+
+test('both the customer and the kitchen hear about each step', async () => {
+  const app = application(runFixture());
+  await stage(app, '950', 'out_for_delivery');
+  await stage(app, '950', 'delivered');
+
+  const toCustomer = app.notifications.filter((n) => n.audience === 'order');
+  assert.equal(toCustomer.map((n) => n.data.status).join(','), 'out_for_delivery,delivered');
+
+  const toAdmin = app.notifications.filter((n) => n.data?.type === 'delivery_progress');
+  assert.equal(toAdmin.length, 2);
+  assert.match(toAdmin[0].title, /On the way/);
+  assert.match(toAdmin[1].title, /Delivered/);
+});
+
+test('a subscription meal tells the customer which meal is coming', async () => {
+  const app = application(runFixture());
+  const id = 'sub-run:2026-10-10:lunch';
+  await stage(app, id, 'out_for_delivery');
+  await stage(app, id, 'delivered');
+
+  const toCustomer = app.notifications.filter((n) => n.audience === 'user');
+  assert.equal(toCustomer.length, 2);
+  assert.match(toCustomer[0].body, /lunch is out for delivery/);
+  assert.match(toCustomer[1].body, /lunch has been delivered/);
+});
+
+test('repeating a step is harmless and delivering twice is refused', async () => {
+  const app = application(runFixture());
+  await stage(app, '950', 'out_for_delivery');
+  assert.equal((await stage(app, '950', 'out_for_delivery')).code, 204);
+  await stage(app, '950', 'delivered');
+
+  const again = await stage(app, '950', 'delivered');
+  assert.equal(again.code, 409);
+
+  const id = 'sub-run:2026-10-10:lunch';
+  await stage(app, id, 'out_for_delivery');
+  await stage(app, id, 'delivered');
+  assert.equal((await stage(app, id, 'delivered')).code, 409);
+  assert.equal(app.state().subscriptions[0].deliveredMeals.length, 1);
+});
+
+test('the stage endpoint is driver-only and validated', async () => {
+  const app = application(runFixture());
+  assert.equal((await app.request('post', '/api/driver/deliveries/:id/stage', { stage: 'delivered' }, { id: '950' }, {})).code, 401);
+  assert.equal((await stage(app, '950', 'eaten')).code, 400);
+  assert.equal((await stage(app, '999', 'out_for_delivery')).code, 404);
 });
