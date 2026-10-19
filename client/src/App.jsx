@@ -12,6 +12,7 @@ import AdminHolidays from './pages/AdminHolidays'
 import Profile from './pages/Profile'
 import Invoice from './pages/Invoice'
 import Privacy from './pages/Privacy'
+import TrackOrder from './pages/TrackOrder'
 import logo from '../../logo_white.png'
 import calendarIcon from '../../calendar.png'
 import userIcon from '../../user.png'
@@ -96,6 +97,7 @@ function App() {
             <Route path="/profile" element={<Profile />} />
             <Route path="/invoice/:id" element={<Invoice />} />
             <Route path="/privacy" element={<Privacy />} />
+            <Route path="/track/:id" element={<TrackOrder />} />
           </Routes>
         </main>
         <footer className="app-footer">

@@ -73,6 +73,12 @@ export const deleteAccount = (token) =>
 
 export const getHolidays = () => request('/api/holidays');
 
+export const getWallet = (token) =>
+  request('/api/wallet', { headers: authHeaders(token) });
+
+export const trackOrder = (id, token, accessToken) =>
+  request(`/api/orders/${id}/track`, { headers: orderHeaders(token, accessToken) });
+
 export const addHoliday = (payload, adminKey) =>
   request('/api/holidays', {
     method: 'POST',

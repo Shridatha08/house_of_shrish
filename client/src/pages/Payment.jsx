@@ -62,6 +62,9 @@ export default function Payment() {
       <Link to="/" className="btn-link back-link">Back to Menu</Link>
       <h2>{expired ? 'Order expired' : order.status === 'pending_payment' ? 'Scan & Pay' : order.status === 'payment_review' ? 'Payment awaiting verification' : 'Order status'}</h2>
       <p className="status-text">Order #{order.orderNumber || order.id} · Amount ₹{order.total}</p>
+      {order.walletApplied > 0 && (
+        <p className="status-text">₹{order.walletApplied} of ₹{order.subtotal} covered by your wallet.</p>
+      )}
       {expired ? <p className="status-text error">This unpaid order has expired. Place a new order before paying.</p> : order.status === 'pending_payment' ? (
         <>
           <div className="qr-card">

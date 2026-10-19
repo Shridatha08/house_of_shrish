@@ -1412,3 +1412,132 @@
   font-size: 0.9rem;
   color: #6b7280;
 }
+
+/* --- Wallet, referral, FAQ and tracking --- */
+.profile-panel {
+  margin-top: 28px;
+}
+
+.wallet-balance {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: linear-gradient(135deg, #ff8a50, #e8552d);
+  color: #fff;
+  border-radius: 14px;
+  padding: 16px 18px;
+}
+
+.wallet-balance-label,
+.wallet-balance-note {
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.wallet-balance-amount {
+  font-size: 30px;
+  font-weight: 700;
+}
+
+.wallet-heading {
+  margin: 16px 0 6px;
+  font-size: 13px;
+}
+
+.wallet-entries {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.wallet-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid #eee;
+}
+
+.wallet-entry-detail {
+  display: flex;
+  flex-direction: column;
+}
+
+.wallet-entry-detail small {
+  color: #777;
+  font-size: 11px;
+}
+
+.wallet-credit { color: #1f7a3d; font-weight: 700; }
+.wallet-debit { color: #777; font-weight: 700; }
+
+.wallet-apply {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px dashed #e8552d;
+  border-radius: 10px;
+}
+
+.referral-code {
+  margin: 10px 0;
+  padding: 10px 14px;
+  background: #fff6ef;
+  border: 1px dashed #e8552d;
+  border-radius: 10px;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-align: center;
+}
+
+.referral-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.faq-item {
+  border-bottom: 1px solid #eee;
+  padding: 10px 0;
+}
+
+.faq-item summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.faq-item p {
+  margin: 8px 0 0;
+  color: #555;
+  font-size: 14px;
+}
+
+.deadline-warning {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #8a5300;
+  background: #fff6e5;
+  border: 1px solid #f0c67a;
+}
+
+.deadline-warning.severe {
+  color: #a3231b;
+  background: #fdeceb;
+  border-color: #f0a9a4;
+}
+
+.track-page {
+  max-width: 720px;
+}
+
+.track-driver {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid #eee;
+  border-radius: 10px;
+}

@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
-import { placeOrder } from '../api';
+import { placeOrder, getWallet } from '../api';
+import { walletSplit } from '../wallet';
 import LocationPicker from '../components/LocationPicker';
 
 function todayIST() {
@@ -28,6 +29,19 @@ export default function Checkout() {
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [alternateDelivery, setAlternateDelivery] = useState(false);
+  const [walletBalance, setWalletBalance] = useState(0);
+  const [useWallet, setUseWallet] = useState(false);
+
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    getWallet(token)
+      .then((data) => { if (!cancelled) setWalletBalance(data.balance || 0); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [token]);
+
+  const split = walletSplit({ total, balance: walletBalance, useWallet });
 
   const requiresAccount = items.some((i) => i.name.toLowerCase().startsWith('monthly'));
   const blockedByAuth = requiresAccount && !user;
@@ -102,7 +116,8 @@ export default function Checkout() {
             lat: position?.lat ?? null,
             lng: position?.lng ?? null
           },
-          ...(requiresAccount ? { subscriptionStartDate } : {})
+          ...(requiresAccount ? { subscriptionStartDate } : {}),
+          ...(useWallet ? { useWallet: true } : {})
         },
         token
       );
@@ -142,6 +157,24 @@ export default function Checkout() {
             <strong>Total</strong>
             <strong>₹{total}</strong>
           </div>
+          {walletBalance > 0 && (
+            <div className="wallet-apply">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={useWallet}
+                  onChange={(event) => setUseWallet(event.target.checked)}
+                />
+                {' '}Use ₹{split.credit} wallet credit
+              </label>
+              {useWallet && (
+                <div className="cart-total-row">
+                  <strong>To pay</strong>
+                  <strong>₹{split.payable}</strong>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -206,7 +239,7 @@ export default function Checkout() {
         {error && <p className="status-text error">{error}</p>}
 
         <button className="btn-primary" type="submit" disabled={submitting || items.length === 0 || blockedByAuth}>
-          {submitting ? 'Placing order…' : `Place order · ₹${total}`}
+          {submitting ? 'Placing order…' : `Place order · ₹${split.payable}`}
         </button>
       </form>
     </div>

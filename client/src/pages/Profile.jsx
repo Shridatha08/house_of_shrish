@@ -1,7 +1,11 @@
 import { useEffect, useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { updateProfile, getMySubscriptions, getMyOrders, cancelOrder, requestRefund, skipSubscriptionMeal, deleteAccount } from '../api';
+import WalletPanel from '../components/WalletPanel';
+import ReferralCard from '../components/ReferralCard';
+import FaqPanel from '../components/FaqPanel';
+import DeadlineWarning from '../components/DeadlineWarning';
+import { updateProfile, getMySubscriptions, getMyOrders, cancelOrder, requestRefund, skipSubscriptionMeal, deleteAccount, getWallet, getStoreConfig } from '../api';
 
 export default function Profile() {
   const { user, token, ready, updateUser, clearSession } = useAuth();
@@ -26,6 +30,16 @@ export default function Profile() {
   const [historyRefresh, setHistoryRefresh] = useState(0);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState('');
+  const [wallet, setWallet] = useState(null);
+  const [storeConfig, setStoreConfig] = useState(null);
+
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    getWallet(token).then((data) => { if (!cancelled) setWallet(data); }).catch(() => {});
+    getStoreConfig().then((data) => { if (!cancelled) setStoreConfig(data); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [user, token, historyRefresh]);
 
   async function handleDeleteAccount() {
     if (!window.confirm('Delete your account? This cannot be undone. Your profile, saved address, meal subscriptions and notification settings are removed permanently.')) return;
@@ -227,7 +241,7 @@ export default function Profile() {
                   {sub.startDate} → {sub.endDate}
                 </p>
                 {sub.carryForwardDeadline && <p className="subscription-summary-dates">Carry-forward deadline: {sub.carryForwardDeadline}</p>}
-                {sub.mealsBeyondDeadline > 0 && <p className="status-text error">{sub.mealsBeyondDeadline} meal(s) cannot be scheduled before the carry-forward deadline.</p>}
+                <DeadlineWarning subscription={sub} />
                 {!sub.expired && (
                   <p className="subscription-days-remaining">
                     {sub.daysRemaining === 0 ? 'Ends today' : `${sub.daysRemaining} day${sub.daysRemaining === 1 ? '' : 's'} remaining`}
@@ -308,6 +322,7 @@ export default function Profile() {
               <p className="subscription-summary-dates">{order.items.map((item) => `${item.name} × ${item.quantity}`).join(', ')}</p>
               <div className="order-actions">
                 {order.status === 'pending_payment' && <Link to={`/payment/${order.id}`} className="btn-link">Continue payment</Link>}
+                {order.status === 'out_for_delivery' && <Link to={`/track/${order.id}`} className="btn-link">Track order</Link>}
                 {(order.paymentStatus === 'verified' || (!order.paymentStatus && ['paid', 'preparing', 'out_for_delivery', 'delivered', 'refunded'].includes(order.status))) && <Link to={`/invoice/${order.id}`} className="btn-link">View invoice</Link>}
                 {['pending_payment', 'payment_review', 'paid'].includes(order.status) && (
                   <button type="button" className="btn-add" onClick={() => handleCancelOrder(order)} disabled={updatingOrderId === order.id}>Cancel order</button>
@@ -319,6 +334,18 @@ export default function Profile() {
             </div>
           ))}
         </div>
+      </div>
+      <div className="profile-panel">
+        <h2>My Wallet</h2>
+        <WalletPanel wallet={wallet} />
+      </div>
+      <div className="profile-panel">
+        <h2>Refer a friend</h2>
+        <ReferralCard code={user.referralCode} balance={wallet?.balance || 0} />
+      </div>
+      <div className="profile-panel">
+        <h2>FAQ</h2>
+        <FaqPanel config={storeConfig} />
       </div>
       <div className="danger-zone" id="delete-account">
         <h3>Delete your account</h3>
