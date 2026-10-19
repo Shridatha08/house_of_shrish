@@ -2004,3 +2004,64 @@ test('signup without a referral code reports nothing applied', async () => {
   assert.equal(plain.code, 201);
   assert.equal(plain.body.referralApplied, false);
 });
+
+// Takes a fresh order all the way to the doorstep.
+async function deliverOrder(app, items) {
+  const placed = await app.request('post', '/api/orders', { items, customer });
+  const id = placed.body.order.id;
+  const headers = { 'x-order-token': placed.body.accessToken };
+  await verifyPayment(app, id, headers);
+  await app.request('patch', '/api/admin/orders/:id/status', { status: 'preparing' }, { id }, adminHeaders);
+  await app.request('patch', '/api/admin/orders/:id/status', { status: 'out_for_delivery' }, { id }, adminHeaders);
+  await app.request('patch', '/api/admin/orders/:id/status', { status: 'delivered' }, { id }, adminHeaders);
+  return { id, orderNumber: placed.body.order.orderNumber };
+}
+
+const deliveredNoteOf = (app) =>
+  app.notifications.filter((entry) => entry.title === 'Delivered' && entry.audience === 'order').pop();
+
+test('a delivered box of sweets is not called a meal', async () => {
+  const app = application();
+  await deliverOrder(app, [{ id: 6, quantity: 1, customisation: '200g' }]);
+
+  const note = deliveredNoteOf(app);
+  assert.match(note.body, /box of homemade goodness/);
+  assert.match(note.body, /rich, healthy crunch/);
+  assert.doesNotMatch(note.body, /protein-packed/);
+});
+
+test('a delivered meal is not called a box of sweets', async () => {
+  const app = application();
+  await deliverOrder(app, [{ id: 1, quantity: 1, customisation: 'Meal A' }]);
+
+  const note = deliveredNoteOf(app);
+  assert.match(note.body, /protein-packed healthy meal/);
+  assert.match(note.body, /Time to fuel up/);
+  assert.doesNotMatch(note.body, /homemade goodness/);
+});
+
+test('an order mixing sweets with a meal is treated as a meal', async () => {
+  const app = application();
+  await deliverOrder(app, [
+    { id: 1, quantity: 1, customisation: 'Meal A' },
+    { id: 6, quantity: 1, customisation: '200g' }
+  ]);
+
+  assert.match(deliveredNoteOf(app).body, /protein-packed/);
+});
+
+test('the delivered note still names the order', async () => {
+  const app = application();
+  const { orderNumber } = await deliverOrder(app, [{ id: 6, quantity: 1, customisation: '200g' }]);
+
+  assert.match(deliveredNoteOf(app).body, new RegExp(`Order #${orderNumber}`));
+});
+
+test('tracking a delivered order repeats the same sign-off', async () => {
+  const app = application();
+  const { id } = await deliverOrder(app, [{ id: 6, quantity: 1, customisation: '200g' }]);
+
+  const tracked = await app.request('get', '/api/orders/:id/track', {}, { id }, { authorization: 'Bearer user-token' });
+  assert.equal(tracked.body.status, 'delivered');
+  assert.match(tracked.body.note, /box of homemade goodness/);
+});

@@ -47,9 +47,10 @@ export function deadlineMessage(sub, today) {
 export function etaText(tracking) {
   if (!tracking) return '';
   if (!tracking.trackable) {
-    return tracking.status === 'delivered'
-      ? 'This order has been delivered.'
-      : 'Live tracking starts once your order is out for delivery.';
+    if (tracking.status === 'delivered') {
+      return tracking.note || 'This order has been delivered.';
+    }
+    return 'Live tracking starts once your order is out for delivery.';
   }
   const parts = [];
   if (tracking.etaMinutes != null) {

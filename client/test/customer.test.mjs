@@ -130,3 +130,14 @@ test('the customer being next is said plainly', () => {
 test('a trackable order with no numbers still says something', () => {
   assert.equal(etaText({ trackable: true }), 'On the way');
 });
+
+test('a delivered order shows the kitchen note rather than a generic line', () => {
+  assert.equal(
+    etaText({ trackable: false, status: 'delivered', note: 'Your box of homemade goodness has been delivered! Enjoy the rich, healthy crunch.' }),
+    'Your box of homemade goodness has been delivered! Enjoy the rich, healthy crunch.'
+  );
+});
+
+test('an older server with no note still says something sensible', () => {
+  assert.equal(etaText({ trackable: false, status: 'delivered' }), 'This order has been delivered.');
+});

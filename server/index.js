@@ -222,6 +222,24 @@ function requiresLocalDelivery(menuItem) {
   return menuItem?.category === 'Pure Veg Meals';
 }
 
+const SWEETS_DELIVERED = 'Your box of homemade goodness has been delivered! Enjoy the rich, healthy crunch.';
+
+function mealDelivered(what = 'meal') {
+  return `Your protein-packed healthy ${what} has been delivered. Time to fuel up!`;
+}
+
+// A box of sweets is a gift, not lunch, so it gets its own sign-off.
+function isSweetsOnlyOrder(data, order) {
+  const items = order?.items || [];
+  if (!items.length) return false;
+  const menuById = new Map((data.menu || []).map((item) => [item.id, item]));
+  return items.every((item) => menuById.get(item.id)?.category === 'Artisanal Sweets');
+}
+
+function deliveredNote(data, order) {
+  return isSweetsOnlyOrder(data, order) ? SWEETS_DELIVERED : mealDelivered();
+}
+
 function getDriverFromToken(data, req) {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
@@ -1165,7 +1183,7 @@ async function advanceStop(db, driver, stopId, stage) {
     await db.write();
     await notifyUser(db, subscription.userId, {
       title: 'Delivered',
-      body: `Your ${mealLabel} has been delivered. Enjoy your meal!`,
+      body: mealDelivered(mealLabel),
       data: { type: 'subscription_status', subscriptionId: subscription.id, date, meal, status: 'delivered' }
     });
     await notifyAdmins(db, {
@@ -1200,7 +1218,7 @@ async function advanceStop(db, driver, stopId, stage) {
   await db.write();
 
   const announcement = stage === 'delivered'
-    ? ['Delivered', `Order #${order.orderNumber} has been delivered. Enjoy your meal!`]
+    ? ['Delivered', `Order #${order.orderNumber} · ${deliveredNote(db.data, order)}`]
     : ['On the way', `Order #${order.orderNumber} is out for delivery.`];
   await notifyOrder(db, order, {
     title: announcement[0],
@@ -1982,7 +2000,7 @@ app.patch('/api/admin/orders/:id/status', async (req, res) => {
     paid: ['Payment confirmed', `We have verified your payment for order #${order.orderNumber}.`],
     preparing: ['Order being prepared', `Order #${order.orderNumber} is now being prepared.`],
     out_for_delivery: ['Out for delivery', `Order #${order.orderNumber} is on its way.`],
-    delivered: ['Delivered', `Order #${order.orderNumber} has been delivered. Enjoy your meal!`]
+    delivered: ['Delivered', `Order #${order.orderNumber} · ${deliveredNote(db.data, order)}`]
   };
   const announcement = announcements[status];
   if (announcement) {
@@ -2261,7 +2279,7 @@ app.get('/api/orders/:id/track', async (req, res) => {
   // A driver's position is only ever exposed while they are actually carrying
   // this customer's food.
   if (order.status !== 'out_for_delivery') {
-    return res.json({ status: order.status, trackable: false, driver: null, destination: null, stopsAway: null, distanceKm: null, etaMinutes: null });
+    return res.json({ status: order.status, trackable: false, note: order.status === 'delivered' ? deliveredNote(db.data, order) : null, driver: null, destination: null, stopsAway: null, distanceKm: null, etaMinutes: null });
   }
 
   const driver = trackingDriver(db.data, order);
