@@ -1902,3 +1902,87 @@ test('a manual adjustment cannot overdraw or be nonsense', async () => {
   assert.equal((await call({ amount: -40 })).code, 200);
   assert.equal(app.state().users[0].walletBalance, 60);
 });
+
+test('a referral missed at sign-up can be attached and settles at once', async () => {
+  const app = application();
+  const code = (await app.request('get', '/api/auth/me')).body.user.referralCode;
+
+  // Registered without the code, exactly as the live accounts were.
+  const joined = await app.request('post', '/api/auth/register', {
+    ...customer, name: 'Abhishek', phone: '9111111111', password: 'password'
+  });
+  const token = { authorization: `Bearer ${joined.body.token}` };
+  const friendId = joined.body.user.id;
+
+  const order = await app.request('post', '/api/orders', {
+    items: [{ id: 6, quantity: 1, customisation: '200g' }], customer
+  }, {}, token);
+  await verifyPayment(app, order.body.order.id, token);
+  assert.equal((app.state().walletEntries || []).length, 0, 'nothing to settle yet');
+
+  const linked = await app.request('post', '/api/admin/users/:id/referrer',
+    { referralCode: code }, { id: String(friendId) }, adminHeaders);
+  assert.equal(linked.code, 200);
+  assert.equal(linked.body.settled, true, 'their past order settles it');
+
+  const balances = app.state().users.map((entry) => Number(entry.walletBalance || 0));
+  assert.deepEqual(balances, [50, 50]);
+});
+
+test('attaching a referral before they order waits for the order', async () => {
+  const app = application();
+  const code = (await app.request('get', '/api/auth/me')).body.user.referralCode;
+  const joined = await app.request('post', '/api/auth/register', {
+    ...customer, name: 'Abhishek', phone: '9111111111', password: 'password'
+  });
+  const token = { authorization: `Bearer ${joined.body.token}` };
+
+  const linked = await app.request('post', '/api/admin/users/:id/referrer',
+    { referralCode: code }, { id: String(joined.body.user.id) }, adminHeaders);
+  assert.equal(linked.body.settled, false);
+  assert.equal((app.state().walletEntries || []).length, 0);
+
+  const order = await app.request('post', '/api/orders', {
+    items: [{ id: 6, quantity: 1, customisation: '200g' }], customer
+  }, {}, token);
+  await verifyPayment(app, order.body.order.id, token);
+  assert.equal(app.state().users.map((e) => Number(e.walletBalance || 0)).join(','), '50,50');
+});
+
+test('a cancelled order does not count as having bought something', async () => {
+  const app = application();
+  const code = (await app.request('get', '/api/auth/me')).body.user.referralCode;
+  const joined = await app.request('post', '/api/auth/register', {
+    ...customer, name: 'Abhishek', phone: '9111111111', password: 'password'
+  });
+  const token = { authorization: `Bearer ${joined.body.token}` };
+
+  const order = await app.request('post', '/api/orders', {
+    items: [{ id: 6, quantity: 1, customisation: '200g' }], customer
+  }, {}, token);
+  await app.request('patch', '/api/orders/:id/cancel', {}, { id: order.body.order.id }, token);
+
+  const linked = await app.request('post', '/api/admin/users/:id/referrer',
+    { referralCode: code }, { id: String(joined.body.user.id) }, adminHeaders);
+  assert.equal(linked.body.settled, false);
+  assert.equal((app.state().walletEntries || []).length, 0);
+});
+
+test('attaching a referral is guarded against the obvious abuses', async () => {
+  const app = application();
+  const mine = (await app.request('get', '/api/auth/me')).body.user;
+  const other = await app.request('post', '/api/auth/register', {
+    ...customer, name: 'Abhishek', phone: '9111111111', password: 'password'
+  });
+  const link = (id, referralCode, headers = adminHeaders) =>
+    app.request('post', '/api/admin/users/:id/referrer', { referralCode }, { id: String(id) }, headers);
+
+  assert.equal((await link(mine.id, 'ANYTHING', {})).code, 403);
+  assert.equal((await link(mine.id, '')).code, 400);
+  assert.equal((await link(mine.id, 'NOTACODE')).code, 400);
+  assert.equal((await link(mine.id, mine.referralCode)).code, 400, 'cannot refer themselves');
+
+  // Mutual referrals would pay four rewards between two accounts.
+  await link(other.body.user.id, mine.referralCode);
+  assert.equal((await link(mine.id, other.body.user.referralCode)).code, 409);
+});

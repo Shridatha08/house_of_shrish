@@ -1760,6 +1760,42 @@ app.get('/api/admin/users', async (req, res) => {
   res.json(db.data.users.map((user) => ({ ...publicUser(user), createdAt: user.createdAt })));
 });
 
+// POST /api/admin/users/:id/referrer - attach a referral that was missed at
+// sign-up, then settle it if they have already ordered.
+app.post('/api/admin/users/:id/referrer', async (req, res) => {
+  if (req.headers['x-admin-key'] !== ADMIN_KEY) return res.status(403).json({ error: 'Invalid admin key.' });
+  const db = await getDb();
+  const user = db.data.users.find((entry) => entry.id === Number(req.params.id));
+  if (!user) return res.status(404).json({ error: 'User not found.' });
+
+  const code = String((req.body || {}).referralCode || '').trim().toUpperCase();
+  if (!code) return res.status(400).json({ error: 'Enter the referral code they used.' });
+
+  const referrer = db.data.users.find((entry) => entry.referralCode === code);
+  if (!referrer) return res.status(400).json({ error: 'That referral code is not valid.' });
+  if (referrer.id === user.id) return res.status(400).json({ error: 'Someone cannot refer themselves.' });
+  if (user.referralRewardedAt) return res.status(409).json({ error: 'This customer has already been rewarded.' });
+  if (referrer.referredBy === user.id) return res.status(409).json({ error: 'These two cannot refer each other.' });
+
+  user.referredBy = referrer.id;
+  await db.write();
+
+  // A cancelled or refunded order is not a purchase worth rewarding.
+  const qualifying = db.data.orders.find((order) =>
+    order.userId === user.id &&
+    paymentStatus(order) === 'verified' &&
+    !['cancelled', 'refund_requested', 'refunded'].includes(order.status));
+  if (qualifying) {
+    await settleReferral(db, qualifying);
+    await db.write();
+  }
+
+  res.json({
+    referrer: publicUser(referrer),
+    settled: Boolean(user.referralRewardedAt)
+  });
+});
+
 // POST /api/admin/users/:id/wallet - adjust a balance by hand (requires admin key)
 app.post('/api/admin/users/:id/wallet', async (req, res) => {
   if (req.headers['x-admin-key'] !== ADMIN_KEY) return res.status(403).json({ error: 'Invalid admin key.' });
