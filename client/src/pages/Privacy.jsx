@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 
-const UPDATED = '11 October 2026';
+const UPDATED = '19 October 2026';
 
 export default function Privacy() {
   return (
@@ -41,6 +41,13 @@ export default function Privacy() {
           itself once the last delivery is done.
         </li>
         <li>
+          <strong>Referrals and wallet credit</strong> — every account is given its own
+          referral code. If you enter someone else's code when you sign up, we record
+          that they referred you so we can credit you both once your first order is
+          confirmed. We also keep your wallet balance and a statement of the credits
+          and deductions that produced it, including the order each one relates to.
+        </li>
+        <li>
           <strong>Notification token</strong> — an anonymous device identifier issued by
           Google Firebase Cloud Messaging, so we can tell you when your order is
           confirmed, prepared or out for delivery. Removing the app or logging out
@@ -62,6 +69,11 @@ export default function Privacy() {
           for the orders assigned to them that day, so they can reach you.
         </li>
         <li>
+          <strong>Someone whose referral code you used</strong> is told your first name
+          when your first order is confirmed, so they know which referral earned them
+          their credit. They are never shown your phone number or address.
+        </li>
+        <li>
           <strong>Google Firebase Cloud Messaging</strong> delivers our push
           notifications.
         </li>
@@ -77,10 +89,10 @@ export default function Privacy() {
 
       <h2>How long we keep it</h2>
       <p>
-        Your account details are kept while your account is open. Completed orders are
-        kept for our accounts and tax records; after you delete your account those
-        records remain only as amounts and items, with your name, phone number and
-        address removed.
+        Your account details, referral code and wallet statement are kept while your
+        account is open. Completed orders are kept for our accounts and tax records;
+        after you delete your account those records remain only as amounts and items,
+        with your name, phone number and address removed.
       </p>
 
       <h2 id="delete-account">Deleting your account</h2>
@@ -90,8 +102,10 @@ export default function Privacy() {
         your <Link to="/profile">profile page</Link>. Deletion is immediate and cannot be
         undone: your profile, saved address, meal subscriptions and notification
         settings are erased, and past orders are stripped of your personal details as
-        described above. If you have an order in progress you will be asked to let it
-        finish, or cancel it, first.
+        described above. Your referral code, any remaining wallet balance and your
+        wallet statement are erased with the account, so spend any credit first;
+        credit already paid to someone who referred you stays with them. If you have an
+        order in progress you will be asked to let it finish, or cancel it, first.
       </p>
       <p>
         If you would rather we did it for you, message us on{' '}
