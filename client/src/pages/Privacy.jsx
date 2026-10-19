@@ -9,7 +9,7 @@ export default function Privacy() {
       <p className="privacy-updated">Last updated {UPDATED}</p>
 
       <p>
-        House of Shrish ("we") runs a vegetarian tiffin and meal delivery service in
+        House of Shrish ("we") runs a vegetarian meal delivery service in
         Bengaluru, through this website and our Android app. This policy explains what
         we collect, why, and how you can have it removed.
       </p>
@@ -47,12 +47,6 @@ export default function Privacy() {
           confirmed. We also keep your wallet balance and a statement of the credits
           and deductions that produced it, including the order each one relates to.
         </li>
-        <li>
-          <strong>Notification token</strong> — an anonymous device identifier issued by
-          Google Firebase Cloud Messaging, so we can tell you when your order is
-          confirmed, prepared or out for delivery. Removing the app or logging out
-          detaches it.
-        </li>
       </ul>
 
       <h2>What we do not collect</h2>
@@ -72,18 +66,6 @@ export default function Privacy() {
           <strong>Someone whose referral code you used</strong> is told your first name
           when your first order is confirmed, so they know which referral earned them
           their credit. They are never shown your phone number or address.
-        </li>
-        <li>
-          <strong>Google Firebase Cloud Messaging</strong> delivers our push
-          notifications.
-        </li>
-        <li>
-          <strong>Our hosting providers</strong> (Vercel and Render) store the site and
-          database on our behalf.
-        </li>
-        <li>
-          <strong>OpenStreetMap</strong> serves the map tiles when you open the location
-          picker.
         </li>
       </ul>
 
@@ -121,12 +103,6 @@ export default function Privacy() {
         You can edit or correct your details at any time from your profile, turn off
         notifications in your device settings, and decline the location permission — the
         app will then ask you to pin your delivery point on the map instead.
-      </p>
-
-      <h2>Children</h2>
-      <p>
-        Our service is meant for adults placing meal orders and is not directed at
-        children under 13.
       </p>
 
       <h2>Contact</h2>
