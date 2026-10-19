@@ -71,7 +71,8 @@ const COLLECTION_KEYS = {
   holidays: (entry) => entry.id,
   drivers: (entry) => entry.id,
   driverSessions: (entry) => entry.token,
-  deviceTokens: (entry) => digest(entry.token)
+  deviceTokens: (entry) => digest(entry.token),
+  walletEntries: (entry) => entry.id
 };
 const COLLECTION_NAMES = Object.keys(COLLECTION_KEYS);
 

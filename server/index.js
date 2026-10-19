@@ -120,6 +120,64 @@ function ensureReferralCode(data, user) {
   return user.referralCode;
 }
 
+const REFERRAL_REWARD = Number(process.env.REFERRAL_REWARD ?? 50);
+
+// Every change to a balance is written to the ledger first, so the balance can
+// always be explained and audited against real money owed.
+function recordWallet(data, userId, amount, reason, meta = {}) {
+  const user = data.users.find((entry) => entry.id === userId);
+  if (!user) return null;
+  data.walletEntries ||= [];
+  const balance = Number(user.walletBalance || 0) + amount;
+  user.walletBalance = Number(balance.toFixed(2));
+  const entry = {
+    id: crypto.randomBytes(8).toString('hex'),
+    userId,
+    amount,
+    reason,
+    balanceAfter: user.walletBalance,
+    createdAt: new Date().toISOString(),
+    ...meta
+  };
+  data.walletEntries.push(entry);
+  return entry;
+}
+
+// Paid out once the referred customer's first order is actually verified, not
+// at sign-up: registration takes an unverified phone number, so crediting
+// earlier would pay out for accounts that never buy anything.
+async function settleReferral(db, order) {
+  if (!order.userId) return;
+  const friend = db.data.users.find((entry) => entry.id === order.userId);
+  if (!friend || !friend.referredBy || friend.referralRewardedAt) return;
+
+  const referrer = db.data.users.find((entry) => entry.id === friend.referredBy);
+  if (!referrer) return;
+
+  friend.referralRewardedAt = new Date().toISOString();
+  recordWallet(db.data, friend.id, REFERRAL_REWARD, 'referral_joined', { orderId: order.id, referrerId: referrer.id });
+  recordWallet(db.data, referrer.id, REFERRAL_REWARD, 'referral_reward', { orderId: order.id, friendId: friend.id });
+
+  await notifyUser(db, referrer.id, {
+    title: `₹${REFERRAL_REWARD} added to your wallet`,
+    body: `${friend.name.split(' ')[0]} placed their first order with your referral code. Use it on your next order.`,
+    data: { type: 'wallet_credit', amount: String(REFERRAL_REWARD) }
+  });
+  await notifyUser(db, friend.id, {
+    title: `₹${REFERRAL_REWARD} added to your wallet`,
+    body: 'Thanks for joining with a referral code. Use your credit on your next order.',
+    data: { type: 'wallet_credit', amount: String(REFERRAL_REWARD) }
+  });
+}
+
+// Credit spent on an order the customer never received belongs back in their
+// wallet, and must only be returned once.
+function returnWalletCredit(data, order) {
+  if (!order.userId || !(order.walletApplied > 0) || order.walletReturnedAt) return;
+  order.walletReturnedAt = new Date().toISOString();
+  recordWallet(data, order.userId, order.walletApplied, 'order_cancelled', { orderId: order.id });
+}
+
 function publicUser(user) {
   return {
     id: user.id,
@@ -129,6 +187,7 @@ function publicUser(user) {
     flatNumber: user.flatNumber || '',
     pincode: user.pincode || '',
     referralCode: user.referralCode || '',
+    walletBalance: Number(user.walletBalance || 0),
     lat: typeof user.lat === 'number' ? user.lat : null,
     lng: typeof user.lng === 'number' ? user.lng : null
   };
@@ -726,6 +785,14 @@ app.post('/api/auth/register', authRateLimit, async (req, res) => {
   db.data.users.push(user);
   ensureReferralCode(db.data, user);
 
+  // Attribution only; the reward is paid when they actually order.
+  const referral = String((req.body || {}).referralCode || '').trim().toUpperCase();
+  if (referral) {
+    const referrer = db.data.users.find((entry) => entry.referralCode === referral && entry.id !== user.id);
+    if (!referrer) return res.status(400).json({ error: 'That referral code is not valid.' });
+    user.referredBy = referrer.id;
+  }
+
   const token = crypto.randomBytes(24).toString('hex');
   db.data.sessions.push({ token, userId: user.id, createdAt: new Date().toISOString() });
   await db.write();
@@ -857,6 +924,7 @@ function purgeUserData(data, userId) {
   data.subscriptions = data.subscriptions.filter((entry) => entry.userId !== userId);
   data.deviceTokens = (data.deviceTokens || []).filter((entry) => entry.userId !== userId);
   data.passwordResetRequests = (data.passwordResetRequests || []).filter((entry) => entry.userId !== userId);
+  data.walletEntries = (data.walletEntries || []).filter((entry) => entry.userId !== userId);
 }
 
 // DELETE /api/auth/me - customer-initiated account deletion, required by Play
@@ -1729,7 +1797,8 @@ app.post('/api/admin/reset', async (req, res) => {
     subscriptions: db.data.subscriptions,
     users: db.data.users,
     drivers: db.data.drivers || [],
-    deviceTokens: db.data.deviceTokens || []
+    deviceTokens: db.data.deviceTokens || [],
+    walletEntries: db.data.walletEntries || []
   });
 
   db.data.orders = [];
@@ -1742,6 +1811,7 @@ app.post('/api/admin/reset', async (req, res) => {
   // Admin devices keep their registration, or this console would go silent
   // until someone reopened it.
   db.data.deviceTokens = (db.data.deviceTokens || []).filter((entry) => entry.isAdmin);
+  db.data.walletEntries = [];
 
   await db.write();
   res.json({ ...counts, snapshotId });
@@ -1824,10 +1894,12 @@ app.patch('/api/admin/orders/:id/status', async (req, res) => {
   if (status === 'paid') {
     order.paymentStatus = 'verified';
     order.paymentVerifiedAt = new Date().toISOString();
+    await settleReferral(db, order);
   }
   if (['cancelled', 'refund_requested', 'refunded'].includes(status)) {
     order.paymentStatus = paymentStatus(order);
     deactivateSubscriptions(db.data, order);
+    returnWalletCredit(db.data, order);
   }
   order.status = status;
   order.statusUpdatedAt = new Date().toISOString();
@@ -1865,7 +1937,7 @@ function unsettledOrders(data, user, phone) {
 
 // POST /api/orders - place a new order
 app.post('/api/orders', orderRateLimit, async (req, res) => {
-  const { items, customer, subscriptionStartDate } = req.body || {};
+  const { items, customer, subscriptionStartDate, useWallet } = req.body || {};
 
   if (!Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: 'Order must include at least one item.' });
@@ -1975,10 +2047,20 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
   const now = new Date();
   const todayKey = now.toISOString().slice(0, 10);
   const ordersToday = db.data.orders.filter((o) => o.createdAt.slice(0, 10) === todayKey).length;
+
+  const subtotal = total;
+  let walletApplied = 0;
+  if (useWallet && user) {
+    walletApplied = Math.min(Number(user.walletBalance || 0), subtotal);
+    total = Number((subtotal - walletApplied).toFixed(2));
+  }
+
   const order = {
     id: orderId,
     orderNumber: buildOrderNumber(now, ordersToday + 1),
     items: orderItems,
+    subtotal,
+    walletApplied,
     total,
     userId: user?.id || null,
     accessToken,
@@ -2000,6 +2082,17 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
   };
 
   db.data.orders.push(order);
+
+  if (walletApplied > 0) {
+    recordWallet(db.data, user.id, -walletApplied, 'order_payment', { orderId: order.id });
+    // Nothing is owed, so there is no payment for an admin to verify.
+    if (total === 0) {
+      order.status = 'paid';
+      order.paymentStatus = 'verified';
+      order.paymentVerifiedAt = new Date().toISOString();
+      order.settledFromWallet = true;
+    }
+  }
 
   if (user) {
     const startDate = preferredStartDate;
@@ -2114,6 +2207,19 @@ app.get('/api/orders/:id/track', async (req, res) => {
   });
 });
 
+// GET /api/wallet - balance and the entries behind it
+app.get('/api/wallet', async (req, res) => {
+  const db = await getDb();
+  const user = await getUserFromToken(db, req);
+  if (!user) return res.status(401).json({ error: 'Not signed in.' });
+
+  const entries = (db.data.walletEntries || [])
+    .filter((entry) => entry.userId === user.id)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .slice(0, 50);
+  res.json({ balance: Number(user.walletBalance || 0), reward: REFERRAL_REWARD, entries });
+});
+
 // PATCH /api/orders/:id/cancel - customer cancellation before fulfillment
 app.patch('/api/orders/:id/cancel', async (req, res) => {
   const db = await getDb();
@@ -2125,6 +2231,7 @@ app.patch('/api/orders/:id/cancel', async (req, res) => {
   order.paymentStatus = paymentStatus(order);
   order.status = 'cancelled';
   deactivateSubscriptions(db.data, order);
+  returnWalletCredit(db.data, order);
   order.cancelledAt = new Date().toISOString();
   await db.write();
   const { accessToken, ...safeOrder } = order;

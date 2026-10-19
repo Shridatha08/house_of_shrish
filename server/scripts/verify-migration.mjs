@@ -17,6 +17,7 @@ const COLLECTION_KEYS = {
   holidays: (entry) => entry.id,
   drivers: (entry) => entry.id,
   driverSessions: (entry) => entry.token,
+  walletEntries: (entry) => entry.id,
   deviceTokens: (entry) => (entry.token ? crypto.createHash('sha256').update(String(entry.token)).digest('hex') : null)
 };
 

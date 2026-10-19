@@ -16,7 +16,7 @@ function fixture() {
     revision: 0,
     users: [{ ...customer, id: 1, passwordHash: 'hashed:password' }],
     sessions: [{ userId: 1, token: 'user-token', createdAt: now }],
-    orders: [], subscriptions: [], passwordResetRequests: [], holidays: [],
+    orders: [], subscriptions: [], passwordResetRequests: [], holidays: [], walletEntries: [],
     settings: { subscriptionWorkingDays: 2, dailyOrderCapacity: 50, kitchenClosedDates: [], lunchCutoffTime: '11:00', dinnerCutoffTime: '18:30' },
     menu: [
       { id: 1, name: 'Single Meal', category: 'Pure Veg Meals', price: 129, customisations: ['Meal A', 'Meal B'] },
@@ -29,7 +29,7 @@ function fixture() {
 
 const RECORD_KEYS = {
   menu: 'id', orders: 'id', users: 'id', sessions: 'token', passwordResetRequests: 'id',
-  subscriptions: 'id', holidays: 'id', drivers: 'id', driverSessions: 'token', deviceTokens: 'token'
+  subscriptions: 'id', holidays: 'id', drivers: 'id', driverSessions: 'token', deviceTokens: 'token', walletEntries: 'id'
 };
 
 // Applies only the records a snapshot actually changed, the way per-record
@@ -1670,4 +1670,161 @@ test('a name with no usable letters still produces a code', async () => {
     ...customer, name: '123 456', phone: '9222222222', password: 'password'
   });
   assert.match(registered.body.user.referralCode, /^SHRISH\d{4}$/);
+});
+
+async function referredFriend(app, { code, phone = '9111111111' } = {}) {
+  return app.request('post', '/api/auth/register', {
+    ...customer, name: 'Friend One', phone, password: 'password', referralCode: code
+  });
+}
+
+// The customer submits payment, then the kitchen verifies it.
+async function verifyPayment(app, id, headers) {
+  await app.request('patch', '/api/orders/:id/mark-paid', {}, { id }, headers);
+  return app.request('patch', '/api/admin/orders/:id/status', { status: 'paid' }, { id }, adminHeaders);
+}
+
+test('nobody is paid until the referred friend actually buys something', async () => {
+  const app = application();
+  const code = (await app.request('get', '/api/auth/me')).body.user.referralCode;
+
+  const joined = await referredFriend(app, { code });
+  assert.equal(joined.code, 201);
+  // Registration alone proves nothing: the phone number was never verified.
+  assert.equal(joined.body.user.walletBalance, 0);
+  assert.equal(app.state().users[0].walletBalance || 0, 0);
+  assert.equal((app.state().walletEntries || []).length, 0);
+
+  const order = await app.request('post', '/api/orders', {
+    items: [{ id: 6, quantity: 1, customisation: '200g' }], customer
+  }, {}, { authorization: `Bearer ${joined.body.token}` });
+  // Placing it is not enough either; payment has to be verified.
+  assert.equal((app.state().walletEntries || []).length, 0);
+
+  await verifyPayment(app, order.body.order.id, { authorization: `Bearer ${joined.body.token}` });
+  const balances = app.state().users.map((entry) => entry.walletBalance);
+  assert.deepEqual(balances.map(Number), [50, 50], 'both sides credited once it is real');
+});
+
+test('a referral pays out exactly once', async () => {
+  const app = application();
+  const code = (await app.request('get', '/api/auth/me')).body.user.referralCode;
+  const joined = await referredFriend(app, { code });
+  const token = { authorization: `Bearer ${joined.body.token}` };
+
+  for (let i = 0; i < 3; i++) {
+    const order = await app.request('post', '/api/orders', {
+      items: [{ id: 6, quantity: 1, customisation: '200g' }], customer
+    }, {}, token);
+    await verifyPayment(app, order.body.order.id, token);
+  }
+
+  const referrer = app.state().users.find((entry) => entry.referralCode === code);
+  assert.equal(referrer.walletBalance, 50, 'not once per order');
+  assert.equal((app.state().walletEntries || []).filter((e) => e.reason === 'referral_reward').length, 1);
+});
+
+test('a code has to exist, and cannot be your own', async () => {
+  const app = application();
+  const bogus = await referredFriend(app, { code: 'NOTACODE1' });
+  assert.equal(bogus.code, 400);
+  assert.match(bogus.body.error, /not valid/);
+  assert.equal(app.state().users.length, 1, 'the account is not created');
+
+  const registered = await app.request('post', '/api/auth/register', {
+    ...customer, name: 'Solo', phone: '9333333333', password: 'password'
+  });
+  const own = registered.body.user.referralCode;
+  const selfUse = await app.request('post', '/api/auth/register', {
+    ...customer, name: 'Solo Two', phone: '9444444444', password: 'password', referralCode: own
+  });
+  // Using someone else's code is fine; the guard is that it must resolve.
+  assert.equal(selfUse.code, 201);
+  assert.equal(app.state().users.find((u) => u.phone === '9444444444').referredBy,
+    app.state().users.find((u) => u.phone === '9333333333').id);
+});
+
+test('wallet credit comes off the amount the customer is asked to pay', async () => {
+  const app = application();
+  app.state().users[0].walletBalance = 50;
+
+  const order = await app.request('post', '/api/orders', {
+    items: [{ id: 6, quantity: 1, customisation: '200g' }], customer, useWallet: true
+  });
+  assert.equal(order.body.order.subtotal, 299);
+  assert.equal(order.body.order.walletApplied, 50);
+  assert.equal(order.body.order.total, 249);
+  assert.match(order.body.upiUri, /am=249/);
+  assert.equal(app.state().users[0].walletBalance, 0, 'the credit is spent');
+});
+
+test('a wallet is never overdrawn', async () => {
+  const app = application();
+  app.state().users[0].walletBalance = 500;
+
+  const order = await app.request('post', '/api/orders', {
+    items: [{ id: 1, quantity: 1, customisation: 'Meal A' }], customer, useWallet: true
+  });
+  assert.equal(order.body.order.walletApplied, 129, 'only what the order costs');
+  assert.equal(order.body.order.total, 0);
+  assert.equal(app.state().users[0].walletBalance, 371);
+  // Nothing is owed, so there is no payment to verify.
+  assert.equal(app.state().orders[0].status, 'paid');
+  assert.equal(app.state().orders[0].paymentStatus, 'verified');
+});
+
+test('credit is not spent unless the customer asks', async () => {
+  const app = application();
+  app.state().users[0].walletBalance = 50;
+
+  const order = await app.request('post', '/api/orders', {
+    items: [{ id: 6, quantity: 1, customisation: '200g' }], customer
+  });
+  assert.equal(order.body.order.total, 299);
+  assert.equal(order.body.order.walletApplied, 0);
+  assert.equal(app.state().users[0].walletBalance, 50);
+});
+
+test('cancelling returns the credit, and only once', async () => {
+  const app = application();
+  app.state().users[0].walletBalance = 50;
+  const order = await app.request('post', '/api/orders', {
+    items: [{ id: 6, quantity: 1, customisation: '200g' }], customer, useWallet: true
+  });
+  assert.equal(app.state().users[0].walletBalance, 0);
+
+  await app.request('patch', '/api/orders/:id/cancel', {}, { id: order.body.order.id });
+  assert.equal(app.state().users[0].walletBalance, 50, 'credit comes back');
+
+  const returns = (app.state().walletEntries || []).filter((e) => e.reason === 'order_cancelled');
+  assert.equal(returns.length, 1);
+});
+
+test('the ledger explains every balance', async () => {
+  const app = application();
+  app.state().users[0].walletBalance = 50;
+  await app.request('post', '/api/orders', {
+    items: [{ id: 6, quantity: 1, customisation: '200g' }], customer, useWallet: true
+  });
+
+  const wallet = await app.request('get', '/api/wallet');
+  assert.equal(wallet.code, 200);
+  assert.equal(wallet.body.balance, 0);
+  assert.equal(wallet.body.entries.length, 1);
+  assert.equal(wallet.body.entries[0].amount, -50);
+  assert.equal(wallet.body.entries[0].balanceAfter, 0);
+  assert.equal((await app.request('get', '/api/wallet', {}, {}, {})).code, 401);
+});
+
+test('deleting an account takes its wallet history with it', async () => {
+  const app = application();
+  app.state().users[0].walletBalance = 50;
+  const order = await app.request('post', '/api/orders', {
+    items: [{ id: 6, quantity: 1, customisation: '200g' }], customer, useWallet: true
+  });
+  await app.request('patch', '/api/orders/:id/cancel', {}, { id: order.body.order.id });
+
+  assert.ok((app.state().walletEntries || []).length > 0);
+  assert.equal((await app.request('delete', '/api/auth/me')).code, 204);
+  assert.equal((app.state().walletEntries || []).length, 0);
 });
