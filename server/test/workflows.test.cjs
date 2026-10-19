@@ -1828,3 +1828,77 @@ test('deleting an account takes its wallet history with it', async () => {
   assert.equal((await app.request('delete', '/api/auth/me')).code, 204);
   assert.equal((app.state().walletEntries || []).length, 0);
 });
+
+test('a referral still settles if the order was verified before referrals existed', async () => {
+  const app = application();
+  const code = (await app.request('get', '/api/auth/me')).body.user.referralCode;
+  const joined = await referredFriend(app, { code });
+  const token = { authorization: `Bearer ${joined.body.token}` };
+
+  const order = await app.request('post', '/api/orders', {
+    items: [{ id: 6, quantity: 1, customisation: '200g' }], customer
+  }, {}, token);
+  const id = order.body.order.id;
+
+  // Simulate an order that reached 'paid' before the payout hook existed.
+  await app.request('patch', '/api/orders/:id/mark-paid', {}, { id }, token);
+  const stored = app.state().orders.find((entry) => entry.id === id);
+  stored.status = 'paid';
+  stored.paymentStatus = 'verified';
+  assert.equal((app.state().walletEntries || []).length, 0);
+
+  await app.request('patch', '/api/admin/orders/:id/status', { status: 'preparing' }, { id }, adminHeaders);
+  const balances = app.state().users.map((entry) => Number(entry.walletBalance || 0));
+  assert.deepEqual(balances, [50, 50], 'a later stage still settles it');
+});
+
+test('a late settle still only pays once', async () => {
+  const app = application();
+  const code = (await app.request('get', '/api/auth/me')).body.user.referralCode;
+  const joined = await referredFriend(app, { code });
+  const token = { authorization: `Bearer ${joined.body.token}` };
+
+  const order = await app.request('post', '/api/orders', {
+    items: [{ id: 6, quantity: 1, customisation: '200g' }], customer
+  }, {}, token);
+  const id = order.body.order.id;
+  await verifyPayment(app, id, token);
+
+  for (const status of ['preparing', 'out_for_delivery', 'delivered']) {
+    await app.request('patch', '/api/admin/orders/:id/status', { status }, { id }, adminHeaders);
+  }
+  assert.equal((app.state().walletEntries || []).filter((e) => e.reason === 'referral_reward').length, 1);
+});
+
+test('the kitchen can put credit into a wallet by hand', async () => {
+  const app = application();
+  const userId = app.state().users[0].id;
+
+  const added = await app.request('post', '/api/admin/users/:id/wallet',
+    { amount: 50, note: 'Referral settled manually' }, { id: String(userId) }, adminHeaders);
+  assert.equal(added.code, 200);
+  assert.equal(added.body.balance, 50);
+  assert.equal(added.body.entry.reason, 'admin_adjustment');
+  assert.equal(added.body.entry.note, 'Referral settled manually');
+
+  const wallet = await app.request('get', '/api/wallet');
+  assert.equal(wallet.body.balance, 50);
+  assert.ok(app.notifications.some((n) => n.data?.type === 'wallet_credit'));
+});
+
+test('a manual adjustment cannot overdraw or be nonsense', async () => {
+  const app = application();
+  const id = String(app.state().users[0].id);
+  const call = (body, headers = adminHeaders) =>
+    app.request('post', '/api/admin/users/:id/wallet', body, { id }, headers);
+
+  assert.equal((await call({ amount: 50 }, {})).code, 403);
+  assert.equal((await call({ amount: 0 })).code, 400);
+  assert.equal((await call({ amount: 'fifty' })).code, 400);
+  assert.equal((await call({ amount: -50 })).code, 409, 'nothing to take away');
+  assert.equal(Number(app.state().users[0].walletBalance || 0), 0);
+
+  await call({ amount: 100 });
+  assert.equal((await call({ amount: -40 })).code, 200);
+  assert.equal(app.state().users[0].walletBalance, 60);
+});

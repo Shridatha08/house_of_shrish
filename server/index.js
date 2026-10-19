@@ -1760,6 +1760,36 @@ app.get('/api/admin/users', async (req, res) => {
   res.json(db.data.users.map((user) => ({ ...publicUser(user), createdAt: user.createdAt })));
 });
 
+// POST /api/admin/users/:id/wallet - adjust a balance by hand (requires admin key)
+app.post('/api/admin/users/:id/wallet', async (req, res) => {
+  if (req.headers['x-admin-key'] !== ADMIN_KEY) return res.status(403).json({ error: 'Invalid admin key.' });
+  const db = await getDb();
+  const user = db.data.users.find((entry) => entry.id === Number(req.params.id));
+  if (!user) return res.status(404).json({ error: 'User not found.' });
+
+  const { amount, note } = req.body || {};
+  const value = Number(amount);
+  if (!Number.isFinite(value) || value === 0 || Math.abs(value) > 100000) {
+    return res.status(400).json({ error: 'Enter an amount between -100000 and 100000.' });
+  }
+  if (Number(user.walletBalance || 0) + value < 0) {
+    return res.status(409).json({ error: `That would overdraw the wallet. Balance is ₹${Number(user.walletBalance || 0)}.` });
+  }
+
+  const entry = recordWallet(db.data, user.id, value, 'admin_adjustment', {
+    note: typeof note === 'string' ? note.trim().slice(0, 140) : ''
+  });
+  await db.write();
+
+  await notifyUser(db, user.id, {
+    title: value > 0 ? `₹${value} added to your wallet` : `₹${Math.abs(value)} removed from your wallet`,
+    body: entry.note || 'Your wallet balance has been updated by House of Shrish.',
+    data: { type: 'wallet_credit', amount: String(value) }
+  });
+
+  res.json({ balance: user.walletBalance, entry });
+});
+
 // DELETE /api/admin/users/:id - remove a registered user and their sessions/subscriptions (requires admin key)
 app.delete('/api/admin/users/:id', async (req, res) => {
   if (req.headers['x-admin-key'] !== ADMIN_KEY) {
@@ -1894,6 +1924,11 @@ app.patch('/api/admin/orders/:id/status', async (req, res) => {
   if (status === 'paid') {
     order.paymentStatus = 'verified';
     order.paymentVerifiedAt = new Date().toISOString();
+  }
+  // Settled on any verified-payment stage, not just the moment of verification,
+  // so an order verified before referrals existed still pays out. The reward is
+  // guarded against repeating.
+  if (['paid', 'preparing', 'out_for_delivery', 'delivered'].includes(status)) {
     await settleReferral(db, order);
   }
   if (['cancelled', 'refund_requested', 'refunded'].includes(status)) {
