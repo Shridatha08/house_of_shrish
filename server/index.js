@@ -797,7 +797,8 @@ app.post('/api/auth/register', authRateLimit, async (req, res) => {
   db.data.sessions.push({ token, userId: user.id, createdAt: new Date().toISOString() });
   await db.write();
 
-  res.status(201).json({ user: publicUser(user), token });
+  // Echoed so the app can confirm attribution instead of failing silently.
+  res.status(201).json({ user: publicUser(user), token, referralApplied: Boolean(user.referredBy) });
 });
 
 // POST /api/auth/login - authenticate an existing account

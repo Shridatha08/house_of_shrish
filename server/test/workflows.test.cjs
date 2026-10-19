@@ -1986,3 +1986,21 @@ test('attaching a referral is guarded against the obvious abuses', async () => {
   await link(other.body.user.id, mine.referralCode);
   assert.equal((await link(mine.id, other.body.user.referralCode)).code, 409);
 });
+
+test('signup tells the app whether the referral code was actually applied', async () => {
+  const app = application();
+  const code = (await app.request('get', '/api/auth/me')).body.user.referralCode;
+
+  const joined = await referredFriend(app, { code });
+  assert.equal(joined.code, 201);
+  assert.equal(joined.body.referralApplied, true);
+});
+
+test('signup without a referral code reports nothing applied', async () => {
+  const app = application();
+  const plain = await app.request('post', '/api/auth/register', {
+    ...customer, name: 'No Referrer', phone: '9000000123', password: 'password'
+  });
+  assert.equal(plain.code, 201);
+  assert.equal(plain.body.referralApplied, false);
+});
