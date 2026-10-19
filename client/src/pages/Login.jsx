@@ -17,6 +17,7 @@ export default function Login() {
   const [address, setAddress] = useState('');
   const [flatNumber, setFlatNumber] = useState('');
   const [pincode, setPincode] = useState('');
+  const [referralCode, setReferralCode] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [forgotPassword, setForgotPassword] = useState(false);
@@ -37,7 +38,7 @@ export default function Login() {
     setSubmitting(true);
     try {
       if (mode === 'register') {
-        await register({ name, phone, password, address, flatNumber, pincode });
+        await register({ name, phone, password, address, flatNumber, pincode, referralCode: referralCode.trim().toUpperCase() || undefined });
       } else {
         await login({ phone, password });
       }
@@ -189,6 +190,18 @@ export default function Login() {
             <label>
               Pincode
               <input value={pincode} onChange={(event) => setPincode(event.target.value)} inputMode="numeric" pattern="[1-9][0-9]{5}" maxLength={6} autoComplete="postal-code" required />
+            </label>
+            <label>
+              Referral code (optional)
+              <input
+                value={referralCode}
+                onChange={(event) => setReferralCode(event.target.value.toUpperCase())}
+                maxLength={20}
+                autoCapitalize="characters"
+                autoCorrect="off"
+                placeholder="e.g. ESHWAR9747"
+              />
+              <small>Both of you get ₹50 once your first order is confirmed.</small>
             </label>
             </>
           )}
