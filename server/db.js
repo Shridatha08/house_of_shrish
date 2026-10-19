@@ -184,10 +184,6 @@ function reconcileMenu(menu) {
       existingItem.customisations = structuredClone(menuItem.customisations);
       changed = true;
     }
-    if ([1, 2, 3, 4].includes(menuItem.id) && existingItem.price !== menuItem.price) {
-      existingItem.price = menuItem.price;
-      changed = true;
-    }
   }
 
   const ladoo = defaultData.menu.find((item) => item.id === 6);

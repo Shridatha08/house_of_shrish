@@ -1571,3 +1571,103 @@ test('the stage endpoint is driver-only and validated', async () => {
   assert.equal((await stage(app, '950', 'eaten')).code, 400);
   assert.equal((await stage(app, '999', 'out_for_delivery')).code, 404);
 });
+
+test('the kitchen can change a price and it stays changed', async () => {
+  const app = application();
+  const updated = await app.request('patch', '/api/admin/menu/:id',
+    { available: true, dailyStock: null, price: 149 }, { id: '1' }, adminHeaders);
+  assert.equal(updated.code, 200);
+  assert.equal(updated.body.price, 149);
+
+  // The old adapter reset these prices on every read; a saved price must stick.
+  const menu = await app.request('get', '/api/menu', {}, {}, {});
+  assert.equal(menu.body.find((item) => item.id === 1).price, 149);
+  assert.equal(app.state().menu.find((item) => item.id === 1).price, 149);
+});
+
+test('a new price is what the customer is charged', async () => {
+  const app = application();
+  await app.request('patch', '/api/admin/menu/:id',
+    { available: true, dailyStock: null, price: 149 }, { id: '1' }, adminHeaders);
+
+  const order = await purchase(app);
+  assert.equal(order.code, 201);
+  assert.equal(order.body.order.items[0].price, 149);
+  assert.equal(order.body.order.total, 149);
+});
+
+test('variant prices are edited by size, and charged by size', async () => {
+  const app = application();
+  const updated = await app.request('patch', '/api/admin/menu/:id',
+    { available: true, dailyStock: null, variants: [{ label: '500g', price: 749 }] },
+    { id: '6' }, adminHeaders);
+  assert.equal(updated.code, 200);
+
+  const variants = app.state().menu.find((item) => item.id === 6).variants;
+  assert.equal(variants.find((v) => v.label === '500g').price, 749);
+  assert.equal(variants.find((v) => v.label === '200g').price, 299, 'other sizes untouched');
+
+  const order = await app.request('post', '/api/orders', {
+    items: [{ id: 6, quantity: 1, customisation: '500g' }], customer
+  }, {}, {});
+  assert.equal(order.body.order.items[0].price, 749);
+});
+
+test('bad prices are refused', async () => {
+  const app = application();
+  const base = { available: true, dailyStock: null };
+  for (const price of [0, -5, 'free', null, 100001]) {
+    const result = await app.request('patch', '/api/admin/menu/:id', { ...base, price }, { id: '1' }, adminHeaders);
+    assert.equal(result.code, 400, `price ${price}`);
+  }
+  const unknownSize = await app.request('patch', '/api/admin/menu/:id',
+    { ...base, variants: [{ label: '5kg', price: 100 }] }, { id: '6' }, adminHeaders);
+  assert.equal(unknownSize.code, 400);
+  assert.equal(app.state().menu.find((item) => item.id === 1).price, 129, 'nothing changed');
+});
+
+test('every customer gets a referral code built from their name', async () => {
+  const app = application();
+  const registered = await app.request('post', '/api/auth/register', {
+    ...customer, name: 'Eshwar Kumar', phone: '9111111111', password: 'password'
+  });
+  assert.equal(registered.code, 201);
+  assert.match(registered.body.user.referralCode, /^ESHWAR\d{4}$/);
+});
+
+test('an existing customer is given a code on their next visit, and keeps it', async () => {
+  const app = application();
+  assert.equal(app.state().users[0].referralCode, undefined);
+
+  const first = await app.request('get', '/api/auth/me');
+  const code = first.body.user.referralCode;
+  assert.ok(code, 'a code is issued');
+
+  // A shared code cannot change underneath the customer.
+  const second = await app.request('get', '/api/auth/me');
+  assert.equal(second.body.user.referralCode, code);
+
+  await app.request('patch', '/api/auth/profile', { ...customer, name: 'Totally New Name' });
+  const afterRename = await app.request('get', '/api/auth/me');
+  assert.equal(afterRename.body.user.referralCode, code, 'renaming does not reissue it');
+});
+
+test('referral codes are unique even for identical names', async () => {
+  const app = application();
+  const codes = new Set();
+  for (let i = 0; i < 12; i++) {
+    const registered = await app.request('post', '/api/auth/register', {
+      ...customer, name: 'Same Name', phone: `91111111${String(i).padStart(2, '0')}`, password: 'password'
+    });
+    codes.add(registered.body.user.referralCode);
+  }
+  assert.equal(codes.size, 12);
+});
+
+test('a name with no usable letters still produces a code', async () => {
+  const app = application();
+  const registered = await app.request('post', '/api/auth/register', {
+    ...customer, name: '123 456', phone: '9222222222', password: 'password'
+  });
+  assert.match(registered.body.user.referralCode, /^SHRISH\d{4}$/);
+});

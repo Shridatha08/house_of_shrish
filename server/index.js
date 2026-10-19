@@ -95,6 +95,31 @@ async function getUserFromToken(db, req) {
   return db.data.users.find((u) => u.id === session.userId) || null;
 }
 
+// Built from the customer's first name so it is easy to say out loud, with a
+// numeric tail for uniqueness. Assigned once and then never changes, because a
+// code that has already been shared has to keep working.
+function buildReferralCode(name, taken) {
+  const base = String(name || '')
+    .trim()
+    .split(/\s+/)[0]
+    .toUpperCase()
+    .replace(/[^A-Z]/g, '')
+    .slice(0, 8) || 'SHRISH';
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const suffix = String(crypto.randomInt(0, 10000)).padStart(4, '0');
+    const code = `${base}${suffix}`;
+    if (!taken.has(code)) return code;
+  }
+  return `${base}${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+}
+
+function ensureReferralCode(data, user) {
+  if (user.referralCode) return user.referralCode;
+  const taken = new Set(data.users.map((entry) => entry.referralCode).filter(Boolean));
+  user.referralCode = buildReferralCode(user.name, taken);
+  return user.referralCode;
+}
+
 function publicUser(user) {
   return {
     id: user.id,
@@ -103,6 +128,7 @@ function publicUser(user) {
     address: user.address || '',
     flatNumber: user.flatNumber || '',
     pincode: user.pincode || '',
+    referralCode: user.referralCode || '',
     lat: typeof user.lat === 'number' ? user.lat : null,
     lng: typeof user.lng === 'number' ? user.lng : null
   };
@@ -698,6 +724,7 @@ app.post('/api/auth/register', authRateLimit, async (req, res) => {
     createdAt: new Date().toISOString()
   };
   db.data.users.push(user);
+  ensureReferralCode(db.data, user);
 
   const token = crypto.randomBytes(24).toString('hex');
   db.data.sessions.push({ token, userId: user.id, createdAt: new Date().toISOString() });
@@ -801,6 +828,11 @@ app.get('/api/auth/me', async (req, res) => {
   const db = await getDb();
   const user = await getUserFromToken(db, req);
   if (!user) return res.status(401).json({ error: 'Not signed in.' });
+  // Backfills customers who registered before referral codes existed.
+  if (!user.referralCode) {
+    ensureReferralCode(db.data, user);
+    await db.write();
+  }
   res.json({ user: publicUser(user) });
 });
 
@@ -1243,17 +1275,35 @@ app.get('/api/store-config', async (req, res) => {
   });
 });
 
-// PATCH /api/admin/menu/:id - update availability and daily stock
+// PATCH /api/admin/menu/:id - update price, availability and daily stock
 app.patch('/api/admin/menu/:id', async (req, res) => {
   if (req.headers['x-admin-key'] !== ADMIN_KEY) return res.status(403).json({ error: 'Invalid admin key.' });
   const db = await getDb();
   const item = db.data.menu.find((candidate) => candidate.id === Number(req.params.id));
   if (!item) return res.status(404).json({ error: 'Menu item not found.' });
-  const { available, dailyStock } = req.body || {};
+  const { available, dailyStock, price, variants } = req.body || {};
   if (typeof available !== 'boolean') return res.status(400).json({ error: 'Availability must be true or false.' });
   if (dailyStock !== null && (!Number.isInteger(Number(dailyStock)) || Number(dailyStock) < 0)) {
     return res.status(400).json({ error: 'Daily stock must be a non-negative number or empty.' });
   }
+
+  const isValidPrice = (value) => Number.isFinite(Number(value)) && Number(value) > 0 && Number(value) <= 100000;
+  if (price !== undefined) {
+    if (!isValidPrice(price)) return res.status(400).json({ error: 'Price must be between 1 and 100000.' });
+    item.price = Number(price);
+  }
+  // Priced variants are what the customer is actually charged, so they are
+  // edited by label rather than replaced wholesale.
+  if (variants !== undefined) {
+    if (!Array.isArray(variants)) return res.status(400).json({ error: 'Variants must be a list.' });
+    for (const entry of variants) {
+      const existing = (item.variants || []).find((option) => option.label === entry?.label);
+      if (!existing) return res.status(400).json({ error: `Unknown size "${entry?.label}".` });
+      if (!isValidPrice(entry.price)) return res.status(400).json({ error: `Price for ${entry.label} must be between 1 and 100000.` });
+      existing.price = Number(entry.price);
+    }
+  }
+
   item.available = available;
   item.dailyStock = dailyStock === null ? null : Number(dailyStock);
   await db.write();
