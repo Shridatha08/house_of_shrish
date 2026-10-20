@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
+import BackToMenu from '../components/BackToMenu';
 import { QRCodeSVG } from 'qrcode.react';
 import { getOrder, markOrderPaid } from '../api';
 import { useCart } from '../context/CartContext';
@@ -59,7 +60,7 @@ export default function Payment() {
 
   return (
     <div className="payment-page">
-      <Link to="/" className="btn-link back-link">Back to Menu</Link>
+      <BackToMenu />
       <h2>{expired ? 'Order expired' : order.status === 'pending_payment' ? 'Scan & Pay' : order.status === 'payment_review' ? 'Payment awaiting verification' : 'Order status'}</h2>
       <p className="status-text">Order #{order.orderNumber || order.id} · Amount ₹{order.total}</p>
       {order.walletApplied > 0 && (

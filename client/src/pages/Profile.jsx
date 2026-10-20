@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
+import BackToMenu from '../components/BackToMenu';
 import { useAuth } from '../context/AuthContext';
 import WalletPanel from '../components/WalletPanel';
 import ReferralCard from '../components/ReferralCard';
@@ -152,7 +153,7 @@ export default function Profile() {
   return (
     <div className="auth-page">
       <div className="auth-card profile-card">
-        <Link to="/" className="btn-link back-link">‹ Back to Menu</Link>
+        <BackToMenu />
         <h2>Hi, {user.name.split(' ')[0]}</h2>
 
         <ProfileSection title="Your Details" icon="details" subtitle="Name, phone and delivery address">

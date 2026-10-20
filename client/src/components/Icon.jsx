@@ -68,6 +68,7 @@ const PATHS = {
     </>
   ),
   close: <path d="M6.5 6.5l11 11M17.5 6.5l-11 11" />,
+  arrowLeft: <path d="M19 12H5.5M11 5.5 4.5 12l6.5 6.5" />,
   feedback: (
     <>
       <path d="M20.5 15.5a2 2 0 0 1-2 2H8l-4.5 3.5v-14a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z" />

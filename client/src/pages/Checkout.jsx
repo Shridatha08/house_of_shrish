@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import BackToMenu from '../components/BackToMenu';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 import { placeOrder, getWallet } from '../api';
@@ -125,7 +126,7 @@ export default function Checkout() {
 
   return (
     <div className="checkout-page">
-      <Link to="/" className="btn-link back-link">‹ Back to Menu</Link>
+      <BackToMenu />
       <h2>Your Cart</h2>
       {items.length === 0 ? (
         <p className="status-text">Your cart is empty.</p>

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import BackToMenu from '../components/BackToMenu';
 import {
   getHolidays,
   addHoliday,
@@ -348,7 +349,7 @@ export default function AdminHolidays() {
     return (
       <div className="auth-page">
         <div className="auth-card">
-          <Link to="/" className="btn-link back-link">‹ Back to Menu</Link>
+          <BackToMenu />
           <h2>Admin Access</h2>
           <form className="checkout-form" onSubmit={handleUnlock}>
             <label>
@@ -370,7 +371,7 @@ export default function AdminHolidays() {
 
   return (
     <div className="events-page">
-      <Link to="/" className="btn-link back-link">‹ Back to Menu</Link>
+      <BackToMenu />
       <h2>Subscription Settings</h2>
       <form className="checkout-form" onSubmit={handleSaveSettings}>
         <label>

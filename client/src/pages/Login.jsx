@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
+import BackToMenu from '../components/BackToMenu';
 import { useAuth } from '../context/AuthContext';
 import { completePasswordReset, requestPasswordReset } from '../api';
 
@@ -102,7 +103,7 @@ export default function Login() {
   return (
     <div className="auth-page">
       <div className="auth-card">
-        <Link to="/" className="btn-link back-link">‹ Back to Menu</Link>
+        <BackToMenu />
         {forgotPassword ? (
           <>
             <h2>Reset password</h2>

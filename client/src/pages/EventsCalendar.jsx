@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
+import BackToMenu from '../components/BackToMenu';
 import calendarIcon from '../../../calendar.png';
 import { useAuth } from '../context/AuthContext';
 import { getHolidays } from '../api';
@@ -55,7 +56,7 @@ export default function EventsCalendar() {
 
   return (
     <div className="events-page">
-      <Link to="/" className="btn-link back-link">‹ Back to Menu</Link>
+      <BackToMenu />
 
       <div className="events-heading">
         <img src={calendarIcon} alt="Events Calendar" className="events-icon" />

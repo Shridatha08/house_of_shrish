@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
+import BackToMenu from '../components/BackToMenu';
 import { getInvoice } from '../api';
 import { useAuth } from '../context/AuthContext';
 
@@ -30,7 +31,7 @@ export default function Invoice() {
 
   return (
     <div className="invoice-page">
-      <Link to="/" className="btn-link back-link no-print">‹ Back to Menu</Link>
+      <BackToMenu className="no-print" />
 
       <div className="invoice-card">
         <div className="invoice-header">
