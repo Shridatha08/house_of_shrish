@@ -912,6 +912,9 @@
   grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 4px;
   margin-top: 12px;
+  /* Square cells would otherwise grow to ~90px on a desktop, which is a lot of
+     white space for seven dots. */
+  max-width: 420px;
 }
 
 .subscription-calendar-weekday {
@@ -924,11 +927,31 @@
 .subscription-calendar-day,
 .subscription-calendar-empty {
   min-width: 0;
-  min-height: 88px;
-  padding: 6px;
+  min-height: 0;
+  aspect-ratio: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 2px;
   border: 1px solid #e9e5e1;
-  border-radius: 6px;
+  border-radius: 8px;
   background: #fff;
+  font: inherit;
+}
+
+.subscription-calendar-empty {
+  border-color: transparent;
+  background: none;
+}
+
+button.subscription-calendar-day:not(:disabled) {
+  cursor: pointer;
+}
+
+button.subscription-calendar-day:disabled {
+  color: #b5b0aa;
 }
 
 .subscription-calendar-day.has-meals {
@@ -936,89 +959,179 @@
   border-color: #e9d8c8;
 }
 
-.subscription-calendar-date {
-  font-size: 0.75rem;
-  font-weight: 700;
+.subscription-calendar-day.is-today {
+  border-color: #d4af37;
+  border-width: 2px;
 }
 
-.subscription-calendar-dots,
-.subscription-calendar-legend {
-  display: flex;
-  align-items: center;
-  gap: 5px;
+.subscription-calendar-day.is-selected {
+  background: #f3e6c8;
+  border-color: #b8912a;
+  box-shadow: 0 0 0 2px rgba(184, 145, 42, 0.25);
+}
+
+.subscription-calendar-date {
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1;
 }
 
 .subscription-calendar-dots {
-  min-height: 10px;
-  margin: 3px 0 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: 7px;
 }
 
 .subscription-meal-dot {
   display: inline-block;
-  width: 8px;
-  height: 8px;
-  flex: 0 0 8px;
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
   border-radius: 50%;
-  background: #888;
+  background: #666;
 }
 
 .subscription-meal-dot.upcoming {
-  background: #2d8a55;
+  background: #2e7d32;
+}
+
+.subscription-meal-dot.delivered {
+  background: #1f4524;
+}
+
+.subscription-meal-dot.past {
+  background: #999;
+}
+
+.subscription-meal-dot.maintenance {
+  background: #d4af37;
 }
 
 .subscription-meal-dot.skipped {
-  background: #d08a21;
-}
-
-.subscription-calendar-events {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.subscription-calendar-event {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 1px;
-  font-size: 0.63rem;
-  line-height: 1.2;
-  overflow-wrap: anywhere;
-}
-
-.subscription-calendar-event.elapsed {
-  color: #888;
-}
-
-.subscription-calendar-event.skipped {
-  color: #9a6415;
-}
-
-.subscription-calendar-event .btn-link {
-  padding: 0;
-  font-size: 0.63rem;
+  background: #c0392b;
 }
 
 .subscription-calendar-legend {
+  display: flex;
   flex-wrap: wrap;
-  margin-top: 10px;
+  gap: 4px 14px;
+  margin-top: 12px;
   color: #666;
   font-size: 0.72rem;
 }
 
+.subscription-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.meal-list-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 22px;
+}
+
+.meal-list-heading h4 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.meal-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.meal-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid #eee;
+  border-left: 3px solid #999;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.meal-row.upcoming { border-left-color: #2e7d32; }
+.meal-row.delivered { border-left-color: #1f4524; }
+.meal-row.maintenance { border-left-color: #d4af37; }
+.meal-row.skipped { border-left-color: #c0392b; }
+
+.meal-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.meal-row-when {
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.meal-row-plan {
+  font-size: 0.74rem;
+  color: #777;
+}
+
+.meal-row-note {
+  font-size: 0.72rem;
+  color: #777;
+  line-height: 1.35;
+}
+
+.meal-row-action {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  flex: 0 0 auto;
+  text-align: right;
+}
+
+.meal-status-pill {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  white-space: nowrap;
+  background: #f0eeec;
+  color: #555;
+}
+
+.meal-status-pill.upcoming { background: #e6f2e7; color: #2e7d32; }
+.meal-status-pill.delivered { background: #e2ebe3; color: #1f4524; }
+.meal-status-pill.maintenance { background: #f7eecd; color: #8a6d12; }
+.meal-status-pill.skipped { background: #fae6e3; color: #c0392b; }
+
+.meal-skip-btn {
+  min-height: 34px;
+  padding: 6px 16px;
+}
+
 @media (max-width: 520px) {
   .subscription-calendar-grid {
-    gap: 2px;
+    gap: 3px;
   }
 
-  .subscription-calendar-day,
-  .subscription-calendar-empty {
-    min-height: 76px;
-    padding: 4px 3px;
+  .subscription-calendar-date {
+    font-size: 0.72rem;
   }
 
-  .subscription-calendar-event {
-    font-size: 0.56rem;
+  .meal-row {
+    align-items: flex-start;
   }
 }
 

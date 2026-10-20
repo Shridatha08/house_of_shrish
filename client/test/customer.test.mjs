@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { walletSplit, entryLabel, referralMessage } from '../src/wallet.js';
 import { faqEntries, formatTime } from '../src/faq.js';
 import { deadlineMessage, deadlineRisk, daysUntilDeadline, etaText, RISK } from '../src/deadline.js';
+import { statusOf, skipAvailability, scheduleByDate, upcomingTotals, planSummary, formatMealDate } from '../src/schedule.js';
 
 const subWith = (overrides = {}) => ({
   carryForwardDeadline: '2026-11-20',
@@ -140,4 +141,70 @@ test('a delivered order shows the kitchen note rather than a generic line', () =
 
 test('an older server with no note still says something sensible', () => {
   assert.equal(etaText({ trackable: false, status: 'delivered' }), 'This order has been delivered.');
+});
+
+test('a past meal nobody skipped reads as served, not as unknown', () => {
+  assert.equal(statusOf('elapsed').label, 'Delivered');
+  assert.equal(statusOf('delivered').label, 'Delivered');
+});
+
+test('the two carry-forward states are told apart', () => {
+  assert.equal(statusOf('skipped').label, 'Skipped');
+  assert.equal(statusOf('maintenance').label, 'Kitchen closed');
+  assert.notEqual(statusOf('skipped').tone, statusOf('maintenance').tone);
+});
+
+test('an unknown status still renders rather than blanking the row', () => {
+  assert.equal(statusOf('something_new').label, 'something_new');
+  assert.equal(statusOf(undefined).label, 'Scheduled');
+});
+
+test('a closed skip says when it closed instead of hiding the button', () => {
+  const lunch = skipAvailability({ status: 'upcoming', meal: 'lunch', canCancel: false });
+  assert.equal(lunch.canSkip, false);
+  assert.equal(lunch.reason, 'Skipping closed at 11 am');
+  assert.equal(skipAvailability({ status: 'upcoming', meal: 'dinner', canCancel: false }).reason, 'Skipping closed at 6 pm');
+});
+
+test('only an upcoming meal offers a skip', () => {
+  assert.equal(skipAvailability({ status: 'upcoming', meal: 'lunch', canCancel: true }).canSkip, true);
+  assert.equal(skipAvailability({ status: 'delivered', meal: 'lunch', canCancel: true }).canSkip, false);
+  assert.equal(skipAvailability({ status: 'skipped', meal: 'lunch' }).reason, '');
+});
+
+test('two plans on one day land in one calendar cell, lunch before dinner', () => {
+  const byDate = scheduleByDate([
+    { id: 'a', itemName: 'Dinner plan', schedule: [{ date: '2026-10-21', meal: 'dinner', status: 'upcoming' }] },
+    { id: 'b', itemName: 'Lunch plan', schedule: [{ date: '2026-10-21', meal: 'lunch', status: 'upcoming' }] }
+  ], '2026-10');
+  assert.equal(byDate['2026-10-21'].map((entry) => entry.meal).join(','), 'lunch,dinner');
+  assert.equal(byDate['2026-10-21'][0].subscriptionName, 'Lunch plan');
+});
+
+test('the calendar only loads the month being looked at', () => {
+  const byDate = scheduleByDate([
+    { id: 'a', schedule: [{ date: '2026-10-21', meal: 'lunch' }, { date: '2026-11-03', meal: 'lunch' }] }
+  ], '2026-10');
+  assert.equal(Object.keys(byDate).join(','), '2026-10-21');
+});
+
+test('skipped and delivered meals are not counted as still to come', () => {
+  const subs = [{ id: 'a', schedule: [
+    { date: '2026-10-21', meal: 'lunch', status: 'upcoming' },
+    { date: '2026-10-21', meal: 'dinner', status: 'upcoming' },
+    { date: '2026-10-20', meal: 'lunch', status: 'delivered' },
+    { date: '2026-10-22', meal: 'lunch', status: 'skipped' }
+  ] }];
+  assert.deepEqual(upcomingTotals(subs), { days: 1, meals: 2 });
+  assert.equal(planSummary(subs), '1 delivery day · 2 meals left');
+});
+
+test('a customer with no plan is not shown a count of zero', () => {
+  assert.equal(planSummary([]), 'No active plan');
+  assert.equal(planSummary([{ id: 'a', schedule: [{ date: '2026-10-20', meal: 'lunch', status: 'delivered' }] }]), 'No meals left');
+});
+
+test('dates read as a person would say them', () => {
+  assert.equal(formatMealDate('2026-10-21'), 'Wed, 21 Oct');
+  assert.equal(formatMealDate('not-a-date'), 'not-a-date');
 });
