@@ -19,7 +19,7 @@ import userIcon from '../../user.png'
 import './App.css'
 
 function HeaderActions() {
-  const { user, logout } = useAuth()
+  const { user } = useAuth()
 
   if (!user) {
     return (
@@ -36,9 +36,6 @@ function HeaderActions() {
           <img src={userIcon} alt="Edit profile" className="profile-icon" />
         </Link>
         <span>Hi, {user.name.split(' ')[0]}</span>
-        <button type="button" className="btn-link btn-link-light" onClick={logout}>
-          Logout
-        </button>
       </div>
       <Link to="/events" className="btn-header btn-header-outline">
         <img src={calendarIcon} alt="" className="btn-header-icon" />

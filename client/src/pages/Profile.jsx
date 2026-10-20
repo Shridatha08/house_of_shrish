@@ -8,7 +8,7 @@ import DeadlineWarning from '../components/DeadlineWarning';
 import { updateProfile, getMySubscriptions, getMyOrders, cancelOrder, requestRefund, skipSubscriptionMeal, deleteAccount, getWallet, getStoreConfig } from '../api';
 
 export default function Profile() {
-  const { user, token, ready, updateUser, clearSession } = useAuth();
+  const { user, token, ready, updateUser, clearSession, logout } = useAuth();
   const [name, setName] = useState(user?.name || '');
   const [phone, setPhone] = useState(user?.phone || '');
   const [address, setAddress] = useState(user?.address || '');
@@ -180,7 +180,9 @@ export default function Profile() {
     <div className="auth-page">
       <div className="auth-card profile-card">
         <Link to="/" className="btn-link back-link">‹ Back to Menu</Link>
-        <h2>My Profile</h2>
+        <h2>Hi, {user.name.split(' ')[0]}</h2>
+
+        <ProfileSection title="Your Details" subtitle="Name, phone and delivery address">
         <form className="checkout-form" onSubmit={handleSubmit}>
           <label>
             Full name
@@ -216,11 +218,14 @@ export default function Profile() {
             {submitting ? 'Saving…' : 'Save Changes'}
           </button>
         </form>
+        </ProfileSection>
 
         {subscriptionsError && <p className="status-text error">Subscriptions: {subscriptionsError}</p>}
         {subscriptions.length > 0 && (
-          <div className="profile-subscriptions">
-            <h2>My Monthly Subscriptions</h2>
+          <ProfileSection
+            title="Meal Plan"
+            subtitle={`${upcomingDates.size} delivery days · ${upcomingMealCount} meals remaining`}
+          >
             {subscriptions.map((sub) => (
               <div key={sub.id} className="subscription-summary-card">
                 <div className="subscription-summary-header">
@@ -302,12 +307,14 @@ export default function Profile() {
               {skipError && <p className="status-text error">{skipError}</p>}
               <div className="subscription-calendar-legend"><span className="subscription-meal-dot upcoming" /> Upcoming meal <span className="subscription-meal-dot skipped" /> Carried forward</div>
             </div>
-          </div>
+          </ProfileSection>
         )}
 
-        <div className="profile-subscriptions">
-          <h2>My Orders</h2>
-          <button type="button" className="btn-add" disabled={loadingHistory} onClick={() => setHistoryRefresh((value) => value + 1)}>Refresh orders and subscriptions</button>
+        <ProfileSection
+          title="Orders"
+          subtitle={orders.length === 0 ? 'No orders yet' : `${orders.length} order${orders.length === 1 ? '' : 's'}`}
+        >
+          <button type="button" className="btn-add" disabled={loadingHistory} onClick={() => setHistoryRefresh((value) => value + 1)}>Refresh</button>
           {orderError && <p className="status-text error">{orderError}</p>}
           {loadingHistory ? <p className="status-text">Loading orders...</p> : orders.length === 0 && !orderError ? <p className="status-text">No orders yet.</p> : orders.map((order) => (
             <div key={order.id} className="subscription-summary-card">
@@ -333,32 +340,52 @@ export default function Profile() {
               </div>
             </div>
           ))}
-        </div>
-      </div>
-      <div className="profile-panel">
-        <h2>My Wallet</h2>
-        <WalletPanel wallet={wallet} />
-      </div>
-      <div className="profile-panel">
-        <h2>Refer a friend</h2>
-        <ReferralCard code={user.referralCode} balance={wallet?.balance || 0} />
-      </div>
-      <div className="profile-panel">
-        <h2>FAQ</h2>
-        <FaqPanel config={storeConfig} />
-      </div>
-      <div className="danger-zone" id="delete-account">
-        <h3>Delete your account</h3>
-        <p>
-          Removes your profile, saved address, meal subscriptions and notification
-          settings. Past orders are kept for our records with your details removed.
-          An order in progress has to be delivered or cancelled first.
-        </p>
-        {deleteError && <p className="form-error">{deleteError}</p>}
-        <button type="button" className="btn-add" onClick={handleDeleteAccount} disabled={deleting}>
-          {deleting ? 'Deleting…' : 'Delete my account'}
-        </button>
+        </ProfileSection>
+
+        <ProfileSection title="Wallet" subtitle={`Balance ₹${wallet?.balance || 0}`}>
+          <WalletPanel wallet={wallet} />
+        </ProfileSection>
+
+        <ProfileSection title="Refer a friend" subtitle="Give ₹50, get ₹50">
+          <ReferralCard code={user.referralCode} balance={wallet?.balance || 0} />
+        </ProfileSection>
+
+        <ProfileSection title="FAQ" subtitle="Cutoffs, skipping and carry-forward">
+          <FaqPanel config={storeConfig} />
+        </ProfileSection>
+
+        <ProfileSection title="Account" subtitle="Log out or delete your account" danger>
+          <button type="button" className="btn-add" onClick={logout}>Logout</button>
+          <div className="danger-zone" id="delete-account">
+            <h3>Delete your account</h3>
+            <p>
+              Removes your profile, saved address, meal subscriptions and notification
+              settings. Past orders are kept for our records with your details removed.
+              An order in progress has to be delivered or cancelled first.
+            </p>
+            {deleteError && <p className="form-error">{deleteError}</p>}
+            <button type="button" className="btn-add" onClick={handleDeleteAccount} disabled={deleting}>
+              {deleting ? 'Deleting…' : 'Delete my account'}
+            </button>
+          </div>
+        </ProfileSection>
       </div>
     </div>
+  );
+}
+
+/// Collapsed by default so the page opens as a short menu rather than a
+/// six-screen scroll.
+function ProfileSection({ title, subtitle, children, danger = false }) {
+  return (
+    <details className={`profile-section${danger ? ' profile-section-danger' : ''}`}>
+      <summary>
+        <span className="profile-section-heading">
+          <span className="profile-section-title">{title}</span>
+          {subtitle && <span className="profile-section-subtitle">{subtitle}</span>}
+        </span>
+      </summary>
+      <div className="profile-section-body">{children}</div>
+    </details>
   );
 }

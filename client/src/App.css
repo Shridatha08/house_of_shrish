@@ -1678,3 +1678,75 @@
     flex: 1 1 auto;
   }
 }
+
+.profile-section {
+  border: 1px solid #eee;
+  border-radius: 14px;
+  background: #fff;
+  margin-bottom: 10px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  overflow: hidden;
+}
+
+.profile-section > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.profile-section > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* Chevron, rotated when the section is open. */
+.profile-section > summary::after {
+  content: '';
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-right: 2px solid #9a8f7a;
+  border-bottom: 2px solid #9a8f7a;
+  transform: rotate(45deg);
+  transition: transform 0.2s ease;
+}
+
+.profile-section[open] > summary::after {
+  transform: rotate(-135deg);
+}
+
+.profile-section-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.profile-section-title {
+  font-weight: 700;
+  font-size: 0.98rem;
+  color: #2b2b2b;
+}
+
+.profile-section-subtitle {
+  font-size: 0.76rem;
+  color: #777;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.profile-section-body {
+  padding: 0 16px 16px;
+}
+
+.profile-section-danger .profile-section-title {
+  color: #b91c1c;
+}
+
+.profile-section .danger-zone {
+  margin-top: 14px;
+}
