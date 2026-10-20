@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import WalletPanel from '../components/WalletPanel';
 import ReferralCard from '../components/ReferralCard';
 import FaqPanel from '../components/FaqPanel';
+import Icon from '../components/Icon';
 import DeadlineWarning from '../components/DeadlineWarning';
 import { updateProfile, getMySubscriptions, getMyOrders, cancelOrder, requestRefund, skipSubscriptionMeal, deleteAccount, getWallet, getStoreConfig } from '../api';
 
@@ -182,7 +183,7 @@ export default function Profile() {
         <Link to="/" className="btn-link back-link">‹ Back to Menu</Link>
         <h2>Hi, {user.name.split(' ')[0]}</h2>
 
-        <ProfileSection title="Your Details" subtitle="Name, phone and delivery address">
+        <ProfileSection title="Your Details" icon="details" subtitle="Name, phone and delivery address">
         <form className="checkout-form" onSubmit={handleSubmit}>
           <label>
             Full name
@@ -220,12 +221,18 @@ export default function Profile() {
         </form>
         </ProfileSection>
 
-        {subscriptionsError && <p className="status-text error">Subscriptions: {subscriptionsError}</p>}
-        {subscriptions.length > 0 && (
-          <ProfileSection
-            title="Meal Plan"
-            subtitle={`${upcomingDates.size} delivery days · ${upcomingMealCount} meals remaining`}
-          >
+        <ProfileSection
+          title="Meal Plan"
+          icon="plan"
+          subtitle={subscriptions.length === 0
+            ? 'No active plan'
+            : `${upcomingDates.size} delivery days · ${upcomingMealCount} meals remaining`}
+        >
+          {subscriptionsError && <p className="status-text error">Subscriptions: {subscriptionsError}</p>}
+          {subscriptions.length === 0 && !subscriptionsError && (
+            <p className="status-text">No meal plan yet. A monthly plan appears here once your payment is verified.</p>
+          )}
+          {subscriptions.length > 0 && (<>
             {subscriptions.map((sub) => (
               <div key={sub.id} className="subscription-summary-card">
                 <div className="subscription-summary-header">
@@ -307,11 +314,12 @@ export default function Profile() {
               {skipError && <p className="status-text error">{skipError}</p>}
               <div className="subscription-calendar-legend"><span className="subscription-meal-dot upcoming" /> Upcoming meal <span className="subscription-meal-dot skipped" /> Carried forward</div>
             </div>
-          </ProfileSection>
-        )}
+          </>)}
+        </ProfileSection>
 
         <ProfileSection
           title="Orders"
+          icon="orders"
           subtitle={orders.length === 0 ? 'No orders yet' : `${orders.length} order${orders.length === 1 ? '' : 's'}`}
         >
           <button type="button" className="btn-add" disabled={loadingHistory} onClick={() => setHistoryRefresh((value) => value + 1)}>Refresh</button>
@@ -342,19 +350,19 @@ export default function Profile() {
           ))}
         </ProfileSection>
 
-        <ProfileSection title="Wallet" subtitle={`Balance ₹${wallet?.balance || 0}`}>
+        <ProfileSection title="Wallet" icon="wallet" subtitle={`Balance ₹${wallet?.balance || 0}`}>
           <WalletPanel wallet={wallet} />
         </ProfileSection>
 
-        <ProfileSection title="Refer a friend" subtitle="Give ₹50, get ₹50">
+        <ProfileSection title="Refer a friend" icon="referral" subtitle="Give ₹50, get ₹50">
           <ReferralCard code={user.referralCode} balance={wallet?.balance || 0} />
         </ProfileSection>
 
-        <ProfileSection title="FAQ" subtitle="Cutoffs, skipping and carry-forward">
+        <ProfileSection title="FAQ" icon="faq" subtitle="Cutoffs, skipping and carry-forward">
           <FaqPanel config={storeConfig} />
         </ProfileSection>
 
-        <ProfileSection title="Account" subtitle="Log out or delete your account" danger>
+        <ProfileSection title="Account" icon="account" subtitle="Log out or delete your account" danger>
           <button type="button" className="btn-add" onClick={logout}>Logout</button>
           <div className="danger-zone" id="delete-account">
             <h3>Delete your account</h3>
@@ -376,10 +384,11 @@ export default function Profile() {
 
 /// Collapsed by default so the page opens as a short menu rather than a
 /// six-screen scroll.
-function ProfileSection({ title, subtitle, children, danger = false }) {
+function ProfileSection({ title, subtitle, icon, children, danger = false }) {
   return (
     <details className={`profile-section${danger ? ' profile-section-danger' : ''}`}>
       <summary>
+        {icon && <span className="profile-section-icon"><Icon name={icon} /></span>}
         <span className="profile-section-heading">
           <span className="profile-section-title">{title}</span>
           {subtitle && <span className="profile-section-subtitle">{subtitle}</span>}

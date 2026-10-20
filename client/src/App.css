@@ -1750,3 +1750,28 @@
 .profile-section .danger-zone {
   margin-top: 14px;
 }
+
+.profile-section-icon {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(58, 42, 18, 0.08);
+  color: #3a2a12;
+}
+
+.profile-section-danger .profile-section-icon {
+  background: rgba(185, 28, 28, 0.1);
+  color: #b91c1c;
+}
+
+.profile-section > summary {
+  gap: 12px;
+}
+
+.profile-section-heading {
+  flex: 1 1 auto;
+}
