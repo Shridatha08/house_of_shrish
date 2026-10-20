@@ -54,6 +54,17 @@ export function mealKey(subscriptionId, date, meal) {
   return `${subscriptionId}:${date}:${meal}`;
 }
 
+// A whole month is 40-odd rows to scroll past. Three days either side of today
+// covers the meal you are about to get and the few you might query.
+export const NEARBY_DAYS = 3;
+
+export function withinDays(date, today, days = NEARBY_DAYS) {
+  const when = Date.parse(`${date}T00:00:00Z`);
+  const now = Date.parse(`${today}T00:00:00Z`);
+  if (Number.isNaN(when) || Number.isNaN(now)) return false;
+  return Math.abs(when - now) <= days * 86400000;
+}
+
 // Flattens every plan into one date-keyed calendar, because a customer on both
 // a lunch and a dinner plan thinks in days, not in subscriptions.
 export function scheduleByDate(subscriptions, monthKey) {

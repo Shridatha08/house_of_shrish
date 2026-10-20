@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { walletSplit, entryLabel, referralMessage } from '../src/wallet.js';
 import { faqEntries, formatTime } from '../src/faq.js';
 import { deadlineMessage, deadlineRisk, daysUntilDeadline, etaText, RISK } from '../src/deadline.js';
-import { statusOf, skipAvailability, scheduleByDate, upcomingTotals, planSummary, formatMealDate } from '../src/schedule.js';
+import { statusOf, skipAvailability, scheduleByDate, upcomingTotals, planSummary, formatMealDate, withinDays } from '../src/schedule.js';
 
 const subWith = (overrides = {}) => ({
   carryForwardDeadline: '2026-11-20',
@@ -207,4 +207,21 @@ test('a customer with no plan is not shown a count of zero', () => {
 test('dates read as a person would say them', () => {
   assert.equal(formatMealDate('2026-10-21'), 'Wed, 21 Oct');
   assert.equal(formatMealDate('not-a-date'), 'not-a-date');
+});
+
+test('the short list reaches three days either side of today', () => {
+  assert.equal(withinDays('2026-10-17', '2026-10-20'), true);
+  assert.equal(withinDays('2026-10-23', '2026-10-20'), true);
+  assert.equal(withinDays('2026-10-16', '2026-10-20'), false);
+  assert.equal(withinDays('2026-10-24', '2026-10-20'), false);
+});
+
+test('the window spans a month boundary rather than stopping at the 1st', () => {
+  assert.equal(withinDays('2026-09-29', '2026-10-01'), true);
+  assert.equal(withinDays('2026-11-02', '2026-10-31'), true);
+});
+
+test('a missing or broken date is never counted as nearby', () => {
+  assert.equal(withinDays('not-a-date', '2026-10-20'), false);
+  assert.equal(withinDays('2026-10-20', ''), false);
 });

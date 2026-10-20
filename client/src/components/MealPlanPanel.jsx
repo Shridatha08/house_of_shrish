@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { statusOf, mealLabel, formatMealDate, skipAvailability, mealKey, scheduleByDate, upcomingTotals, LEGEND, MEAL_STATUSES } from '../schedule';
+import { statusOf, mealLabel, formatMealDate, skipAvailability, mealKey, scheduleByDate, upcomingTotals, withinDays, LEGEND, MEAL_STATUSES } from '../schedule';
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
@@ -8,6 +8,7 @@ const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 export default function MealPlanPanel({ subscriptions, onSkip, skippingMealKey, skipError, today }) {
   const [month, setMonth] = useState(() => new Date());
   const [selectedDate, setSelectedDate] = useState('');
+  const [showAll, setShowAll] = useState(false);
 
   const year = month.getFullYear();
   const monthIndex = month.getMonth();
@@ -21,12 +22,20 @@ export default function MealPlanPanel({ subscriptions, onSkip, skippingMealKey, 
   ];
   while (cells.length % 7) cells.push(null);
 
-  const byDate = scheduleByDate(subscriptions, monthKey);
+  const byDate = scheduleByDate(subscriptions);
   const { days: upcomingDays, meals: upcomingMeals } = upcomingTotals(subscriptions);
   const todayKey = today || new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 
-  const visible = (date) => (byDate[date] || []).filter((entry) => selectedDate || entry.status !== 'elapsed');
-  const listedDates = (selectedDate ? [selectedDate] : Object.keys(byDate).sort()).filter((date) => visible(date).length);
+  // The short window only means anything while looking at the month today is
+  // in; paging back to September has to list September.
+  const viewingThisMonth = todayKey.startsWith(monthKey);
+  const windowed = viewingThisMonth && !showAll && !selectedDate;
+  const allDates = Object.keys(byDate).sort();
+  const listedDates = selectedDate
+    ? [selectedDate]
+    : windowed
+      ? allDates.filter((date) => withinDays(date, todayKey))
+      : allDates.filter((date) => date.startsWith(monthKey));
 
   function changeMonth(step) {
     setSelectedDate('');
@@ -90,14 +99,30 @@ export default function MealPlanPanel({ subscriptions, onSkip, skippingMealKey, 
       </div>
 
       <div className="meal-list-heading">
-        <h4>{selectedDate ? formatMealDate(selectedDate) : `${monthTitle} meals`}</h4>
-        {selectedDate && <button type="button" className="btn-link" onClick={() => setSelectedDate('')}>Show whole month</button>}
+        <h4>
+          {selectedDate
+            ? formatMealDate(selectedDate)
+            : windowed
+              ? 'This week'
+              : `${monthTitle} meals`}
+        </h4>
+        {selectedDate
+          ? <button type="button" className="btn-link" onClick={() => setSelectedDate('')}>Back to this week</button>
+          : viewingThisMonth && (
+            <button type="button" className="btn-link" onClick={() => setShowAll((current) => !current)}>
+              {showAll ? 'Show less' : 'Show whole month'}
+            </button>
+          )}
       </div>
       {skipError && <p className="status-text error">{skipError}</p>}
-      {listedDates.length === 0 && <p className="status-text">Nothing scheduled here.</p>}
+      {listedDates.length === 0 && (
+        <p className="status-text">
+          {windowed ? 'Nothing in the last or next three days.' : 'Nothing scheduled here.'}
+        </p>
+      )}
 
       <ul className="meal-list">
-        {listedDates.flatMap((date) => visible(date).map((entry, entryIndex) => {
+        {listedDates.flatMap((date) => (byDate[date] || []).map((entry, entryIndex) => {
           const status = statusOf(entry.status);
           const { canSkip, reason } = skipAvailability(entry);
           const key = mealKey(entry.subscriptionId, date, entry.meal);
