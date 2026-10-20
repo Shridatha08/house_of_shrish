@@ -1541,3 +1541,140 @@
   border: 1px solid #eee;
   border-radius: 10px;
 }
+
+/* Shared with the loading and error messages, where centring is right. Inside
+   a menu card it has to line up with the rest of the card. */
+.menu-card .status-text {
+  text-align: left;
+}
+
+/* Phones. The desktop header puts the brand and the account actions on one
+   row; on a narrow screen they wrap into three stacked rows and eat the
+   viewport, which is worse because the header is sticky. */
+@media (max-width: 640px) {
+  .app-header {
+    flex-wrap: nowrap;
+    padding: 8px 12px;
+    gap: 8px;
+  }
+
+  .brand {
+    gap: 9px;
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  .brand-logo {
+    height: 40px;
+    width: 40px;
+  }
+
+  .brand-text {
+    min-width: 0;
+  }
+
+  .brand-name {
+    font-size: 1rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Unreadable at this size, and the brand name needs the room. */
+  .brand-tagline {
+    display: none;
+  }
+
+  .header-account {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+  }
+
+  .header-account-row {
+    gap: 6px;
+    font-size: 0.78rem;
+  }
+
+  /* The profile icon beside it already goes to the same place. */
+  .header-account-row span {
+    display: none;
+  }
+
+  .btn-header {
+    padding: 7px 11px;
+    font-size: 0.76rem;
+  }
+
+  /* Icon only: the label does not fit beside the brand. */
+  .btn-header-outline {
+    font-size: 0;
+    padding: 7px 9px;
+    gap: 0;
+  }
+
+  .btn-header-outline .btn-header-icon {
+    height: 17px;
+    width: 17px;
+  }
+
+  .app-main {
+    padding: 16px 14px 96px;
+  }
+
+  .hero {
+    padding: 26px 18px;
+    border-radius: 16px;
+    margin-bottom: 20px;
+  }
+
+  .hero h1 {
+    font-size: 1.3rem;
+  }
+
+  .hero p {
+    font-size: 0.88rem;
+  }
+
+  .hero-stats {
+    gap: 10px;
+    margin-top: 18px;
+  }
+
+  /* Equal columns, and the longest label kept on one line, so the three
+     stats sit on a single tidy row. */
+  .hero-stat {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .hero-stat strong {
+    font-size: 0.76rem;
+    white-space: nowrap;
+  }
+
+  .hero-stat span {
+    font-size: 0.62rem;
+    text-align: center;
+  }
+
+  .cart-bar {
+    padding: 14px 16px;
+    font-size: 0.92rem;
+  }
+
+  .cart-row {
+    grid-template-columns: 1fr auto;
+    row-gap: 6px;
+  }
+
+  .cart-row-price {
+    grid-column: 2;
+    text-align: right;
+  }
+
+  .order-actions > * {
+    flex: 1 1 auto;
+  }
+}
