@@ -76,6 +76,16 @@ export const getHolidays = () => request('/api/holidays');
 export const getWallet = (token) =>
   request('/api/wallet', { headers: authHeaders(token) });
 
+export const sendFeedback = (payload, token) =>
+  request('/api/feedback', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+    headers: authHeaders(token)
+  });
+
+export const getMyFeedback = (token) =>
+  request('/api/feedback', { headers: authHeaders(token) });
+
 export const trackOrder = (id, token, accessToken) =>
   request(`/api/orders/${id}/track`, { headers: orderHeaders(token, accessToken) });
 

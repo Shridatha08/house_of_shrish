@@ -5,6 +5,7 @@ import { walletSplit, entryLabel, referralMessage } from '../src/wallet.js';
 import { faqEntries, formatTime } from '../src/faq.js';
 import { deadlineMessage, deadlineRisk, daysUntilDeadline, etaText, RISK } from '../src/deadline.js';
 import { statusOf, skipAvailability, scheduleByDate, upcomingTotals, planSummary, formatMealDate, withinDays } from '../src/schedule.js';
+import { feedbackError, thanksFor } from '../src/feedback.js';
 
 const subWith = (overrides = {}) => ({
   carryForwardDeadline: '2026-11-20',
@@ -224,4 +225,26 @@ test('the window spans a month boundary rather than stopping at the 1st', () => 
 test('a missing or broken date is never counted as nearby', () => {
   assert.equal(withinDays('not-a-date', '2026-10-20'), false);
   assert.equal(withinDays('2026-10-20', ''), false);
+});
+
+test('feedback has to be one of the three kinds the kitchen sorts by', () => {
+  assert.equal(feedbackError({ type: 'rant', message: 'Something is wrong.' }), 'Pick suggestion, praise or complaint.');
+  assert.equal(feedbackError({ type: 'praise', message: 'Lovely food.' }), '');
+});
+
+test('the form refuses what the server would refuse, before the round trip', () => {
+  assert.equal(feedbackError({ type: 'suggestion', message: '   ' }), 'Please tell us a little more.');
+  assert.equal(feedbackError({ type: 'suggestion', message: 'ok' }), 'Please tell us a little more.');
+  assert.match(feedbackError({ type: 'suggestion', message: 'x'.repeat(2001) }), /2000 characters/);
+});
+
+test('whitespace does not count towards the minimum', () => {
+  assert.equal(feedbackError({ type: 'praise', message: '  ok  ' }), 'Please tell us a little more.');
+  assert.equal(feedbackError({ type: 'praise', message: '  good  ' }), '');
+});
+
+test('a complaint is answered differently from a compliment', () => {
+  assert.match(thanksFor('complaint'), /look into it/);
+  assert.match(thanksFor('praise'), /kitchen will love/);
+  assert.match(thanksFor('suggestion'), /gets read/);
 });

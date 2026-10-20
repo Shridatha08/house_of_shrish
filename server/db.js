@@ -48,7 +48,8 @@ const defaultData = {
     { id: 4, date: '2026-08-15', name: 'Independence Day' },
     { id: 5, date: '2026-10-02', name: 'Gandhi Jayanti' },
     { id: 6, date: '2026-12-25', name: 'Christmas Day' }
-  ]
+  ],
+  feedback: []
 };
 
 const MONGODB_URI = process.env.MONGODB_URI;
@@ -72,7 +73,8 @@ const COLLECTION_KEYS = {
   drivers: (entry) => entry.id,
   driverSessions: (entry) => entry.token,
   deviceTokens: (entry) => digest(entry.token),
-  walletEntries: (entry) => entry.id
+  walletEntries: (entry) => entry.id,
+  feedback: (entry) => entry.id
 };
 const COLLECTION_NAMES = Object.keys(COLLECTION_KEYS);
 

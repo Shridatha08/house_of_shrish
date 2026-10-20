@@ -7,6 +7,7 @@ import FaqPanel from '../components/FaqPanel';
 import Icon from '../components/Icon';
 import DeadlineWarning from '../components/DeadlineWarning';
 import MealPlanPanel from '../components/MealPlanPanel';
+import FeedbackPanel from '../components/FeedbackPanel';
 import { formatMealDate, mealLabel, mealKey, planSummary } from '../schedule';
 import { updateProfile, getMySubscriptions, getMyOrders, cancelOrder, requestRefund, skipSubscriptionMeal, deleteAccount, getWallet, getStoreConfig } from '../api';
 
@@ -282,6 +283,10 @@ export default function Profile() {
 
         <ProfileSection title="FAQ" icon="faq" subtitle="Cutoffs, skipping and carry-forward">
           <FaqPanel config={storeConfig} />
+        </ProfileSection>
+
+        <ProfileSection title="Feedback" icon="feedback" subtitle="Tell us how we're doing">
+          <FeedbackPanel token={token} />
         </ProfileSection>
 
         <ProfileSection title="Account" icon="account" subtitle="Log out or delete your account" danger>

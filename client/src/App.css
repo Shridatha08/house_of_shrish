@@ -1924,3 +1924,132 @@ button.subscription-calendar-day:disabled {
 .profile-section-heading {
   flex: 1 1 auto;
 }
+
+.feedback-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.feedback-question {
+  margin: 0;
+  font-weight: 600;
+  font-size: 0.92rem;
+}
+
+.feedback-types {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.feedback-type {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 8px;
+  border: 1px solid #e3ded8;
+  border-radius: 12px;
+  background: #fff;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+
+.feedback-type.selected {
+  border-color: #e8552d;
+  background: #fff4f0;
+  box-shadow: 0 0 0 1px #e8552d inset;
+}
+
+.feedback-type-label {
+  font-weight: 700;
+  font-size: 0.84rem;
+}
+
+.feedback-type-hint {
+  font-size: 0.68rem;
+  color: #777;
+  line-height: 1.3;
+}
+
+.feedback-panel textarea {
+  width: 100%;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  padding: 10px;
+  font: inherit;
+  resize: vertical;
+}
+
+.feedback-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.feedback-foot .btn-primary {
+  width: auto;
+  padding: 10px 20px;
+}
+
+.feedback-count {
+  font-size: 0.72rem;
+  color: #999;
+}
+
+.feedback-history-heading {
+  margin: 14px 0 0;
+  font-size: 0.9rem;
+}
+
+.feedback-history {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.feedback-entry {
+  border: 1px solid #eee;
+  border-left: 3px solid #999;
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.feedback-entry.suggestion { border-left-color: #2e7d32; }
+.feedback-entry.praise { border-left-color: #d4af37; }
+.feedback-entry.complaint { border-left-color: #c0392b; }
+
+.feedback-entry p {
+  margin: 6px 0 0;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.feedback-entry-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.feedback-entry-date {
+  font-size: 0.72rem;
+  color: #999;
+}
+
+.meal-status-pill.suggestion { background: #e6f2e7; color: #2e7d32; }
+.meal-status-pill.praise { background: #f7eecd; color: #8a6d12; }
+.meal-status-pill.complaint { background: #fae6e3; color: #c0392b; }
+
+.feedback-handled {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 0.7rem;
+  color: #2e7d32;
+  font-weight: 600;
+}

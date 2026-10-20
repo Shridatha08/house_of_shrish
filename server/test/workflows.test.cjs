@@ -16,8 +16,8 @@ function fixture() {
     revision: 0,
     users: [{ ...customer, id: 1, passwordHash: 'hashed:password' }],
     sessions: [{ userId: 1, token: 'user-token', createdAt: now }],
-    orders: [], subscriptions: [], passwordResetRequests: [], holidays: [], walletEntries: [],
-    settings: { subscriptionWorkingDays: 2, dailyOrderCapacity: 50, kitchenClosedDates: [], lunchCutoffTime: '11:00', dinnerCutoffTime: '18:30' },
+    orders: [], subscriptions: [], passwordResetRequests: [], holidays: [], walletEntries: [], feedback: [],
+    settings: { subscriptionWorkingDays: 2, dailyOrderCapacity: 50, kitchenClosedDates: [], lunchCutoffTime: '11:00', dinnerCutoffTime: '18:00' },
     menu: [
       { id: 1, name: 'Single Meal', category: 'Pure Veg Meals', price: 129, customisations: ['Meal A', 'Meal B'] },
       { id: 2, name: 'Monthly (Lunch)', category: 'Pure Veg Meals', price: 3299, customisations: ['Meal A', 'Meal B'] },
@@ -29,7 +29,8 @@ function fixture() {
 
 const RECORD_KEYS = {
   menu: 'id', orders: 'id', users: 'id', sessions: 'token', passwordResetRequests: 'id',
-  subscriptions: 'id', holidays: 'id', drivers: 'id', driverSessions: 'token', deviceTokens: 'token', walletEntries: 'id'
+  subscriptions: 'id', holidays: 'id', drivers: 'id', driverSessions: 'token', deviceTokens: 'token', walletEntries: 'id',
+  feedback: 'id'
 };
 
 // Applies only the records a snapshot actually changed, the way per-record
@@ -2064,4 +2065,131 @@ test('tracking a delivered order repeats the same sign-off', async () => {
   const tracked = await app.request('get', '/api/orders/:id/track', {}, { id }, { authorization: 'Bearer user-token' });
   assert.equal(tracked.body.status, 'delivered');
   assert.match(tracked.body.note, /box of homemade goodness/);
+});
+
+const userHeaders = { authorization: 'Bearer user-token' };
+
+function sendFeedback(app, body) {
+  return app.request('post', '/api/feedback', body, {}, userHeaders);
+}
+
+test('a customer can tell the kitchen how it is doing', async () => {
+  const app = application();
+  const sent = await sendFeedback(app, { type: 'praise', message: 'The sambar was excellent.' });
+
+  assert.equal(sent.code, 201);
+  assert.equal(sent.body.type, 'praise');
+  assert.equal(sent.body.message, 'The sambar was excellent.');
+  assert.equal(sent.body.handled, false);
+  // Stamped with who sent it, so the kitchen can call back without a lookup.
+  assert.equal(sent.body.name, 'Test Customer');
+  assert.equal(sent.body.phone, '9000000000');
+});
+
+test('feedback has to be one of the three kinds', async () => {
+  const app = application();
+  const sent = await sendFeedback(app, { type: 'rant', message: 'Something is wrong.' });
+
+  assert.equal(sent.code, 400);
+  assert.match(sent.body.error, /suggestion, praise or complaint/);
+});
+
+test('an empty or one-word message is refused', async () => {
+  const app = application();
+
+  assert.equal((await sendFeedback(app, { type: 'suggestion', message: '   ' })).code, 400);
+  assert.equal((await sendFeedback(app, { type: 'suggestion', message: 'ok' })).code, 400);
+});
+
+test('a message too long to store is refused rather than truncated', async () => {
+  const app = application();
+  const sent = await sendFeedback(app, { type: 'complaint', message: 'x'.repeat(2001) });
+
+  assert.equal(sent.code, 400);
+  assert.match(sent.body.error, /2000 characters/);
+});
+
+test('feedback needs an account, so every note has someone behind it', async () => {
+  const app = application();
+  const sent = await app.request('post', '/api/feedback', { type: 'praise', message: 'Lovely food.' }, {}, {});
+
+  assert.equal(sent.code, 401);
+});
+
+test('a customer sees their own notes, newest first, and nobody else', async () => {
+  const app = application();
+  await sendFeedback(app, { type: 'suggestion', message: 'Please add filter coffee.' });
+  await sendFeedback(app, { type: 'praise', message: 'Driver was very polite.' });
+  app.state().feedback.push({
+    id: 'other', userId: 99, name: 'Someone Else', phone: '9111111111',
+    type: 'complaint', message: 'Not my note.', handled: false,
+    createdAt: '2026-10-11T04:00:00Z'
+  });
+
+  const mine = await app.request('get', '/api/feedback', {}, {}, userHeaders);
+  assert.equal(mine.body.length, 2);
+  assert.equal(mine.body.map((entry) => entry.message).includes('Not my note.'), false);
+  assert.ok(mine.body[0].createdAt >= mine.body[1].createdAt);
+});
+
+test('the kitchen inbox shows every customer, newest first', async () => {
+  const app = application();
+  await sendFeedback(app, { type: 'complaint', message: 'Dinner arrived cold.' });
+  app.state().feedback.push({
+    id: 'older', userId: 99, name: 'Someone Else', phone: '9111111111',
+    type: 'praise', message: 'An older note.', handled: false,
+    createdAt: '2026-01-01T04:00:00Z'
+  });
+
+  const inbox = await app.request('get', '/api/admin/feedback', {}, {}, adminHeaders);
+  assert.equal(inbox.body.length, 2);
+  assert.equal(inbox.body[0].message, 'Dinner arrived cold.');
+});
+
+test('the inbox is not readable without the admin key', async () => {
+  const app = application();
+  assert.equal((await app.request('get', '/api/admin/feedback', {}, {}, {})).code, 403);
+  assert.equal((await app.request('get', '/api/admin/feedback', {}, {}, userHeaders)).code, 403);
+});
+
+test('marking feedback handled sticks, and can be undone', async () => {
+  const app = application();
+  const { body } = await sendFeedback(app, { type: 'complaint', message: 'Dinner arrived cold.' });
+
+  const done = await app.request('post', '/api/admin/feedback/:id/handled', {}, { id: body.id }, adminHeaders);
+  assert.equal(done.body.handled, true);
+  assert.ok(done.body.handledAt);
+
+  const undone = await app.request('post', '/api/admin/feedback/:id/handled', { handled: false }, { id: body.id }, adminHeaders);
+  assert.equal(undone.body.handled, false);
+  assert.equal(undone.body.handledAt, null);
+});
+
+test('marking feedback that does not exist is a 404, not a crash', async () => {
+  const app = application();
+  const missing = await app.request('post', '/api/admin/feedback/:id/handled', {}, { id: 'nope' }, adminHeaders);
+
+  assert.equal(missing.code, 404);
+});
+
+test('new feedback pushes the kitchen a notification', async () => {
+  const app = application();
+  await sendFeedback(app, { type: 'complaint', message: 'Dinner arrived cold.' });
+
+  const [note] = app.notifications;
+  assert.equal(note.audience, 'admin');
+  assert.match(note.title, /complaint from Test Customer/);
+  assert.match(note.body, /Dinner arrived cold/);
+});
+
+test('a long note is trimmed in the push but kept whole in the inbox', async () => {
+  const app = application();
+  const long = `Dinner was cold again. ${'Please fix this. '.repeat(20)}`.trim();
+  await sendFeedback(app, { type: 'complaint', message: long });
+
+  const [note] = app.notifications;
+  assert.ok(note.body.length <= 120, note.body.length);
+  assert.match(note.body, /…$/);
+  const inbox = await app.request('get', '/api/admin/feedback', {}, {}, adminHeaders);
+  assert.equal(inbox.body[0].message, long);
 });

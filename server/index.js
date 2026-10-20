@@ -80,6 +80,8 @@ const adminRateLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 30, key: (req)
 // NAT address, so this is only a backstop against a flood. The per-customer cap
 // on unsettled orders is what actually protects kitchen capacity.
 const orderRateLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 20 });
+const feedbackRateLimit = rateLimit({ windowMs: 60 * 60 * 1000, max: 10 });
+const FEEDBACK_TYPES = ['suggestion', 'praise', 'complaint'];
 // An unpaid order holds a meal slot, so a handful of them can exhaust the day's
 // capacity and lock out paying customers.
 const MAX_UNSETTLED_ORDERS = Number(process.env.MAX_UNSETTLED_ORDERS ?? 3);
@@ -2308,6 +2310,86 @@ app.get('/api/wallet', async (req, res) => {
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .slice(0, 50);
   res.json({ balance: Number(user.walletBalance || 0), reward: REFERRAL_REWARD, entries });
+});
+
+// POST /api/feedback - a signed-in customer tells us how we are doing
+app.post('/api/feedback', feedbackRateLimit, async (req, res) => {
+  const db = await getDb();
+  const user = await getUserFromToken(db, req);
+  if (!user) return res.status(401).json({ error: 'Not signed in.' });
+
+  const { type, message } = req.body || {};
+  if (!FEEDBACK_TYPES.includes(type)) {
+    return res.status(400).json({ error: 'Pick suggestion, praise or complaint.' });
+  }
+  const text = String(message || '').trim();
+  if (text.length < 4) return res.status(400).json({ error: 'Please tell us a little more.' });
+  if (text.length > 2000) return res.status(400).json({ error: 'Please keep it under 2000 characters.' });
+
+  db.data.feedback ||= [];
+  const entry = {
+    id: crypto.randomBytes(8).toString('hex'),
+    userId: user.id,
+    name: user.name,
+    phone: user.phone,
+    type,
+    message: text,
+    handled: false,
+    createdAt: new Date().toISOString()
+  };
+  db.data.feedback.push(entry);
+  await db.write();
+
+  await notifyAdmins(db, {
+    title: `New ${type} from ${user.name}`,
+    body: text.length > 120 ? `${text.slice(0, 117)}…` : text,
+    data: { type: 'feedback', feedbackId: entry.id }
+  });
+
+  res.status(201).json(entry);
+});
+
+// GET /api/feedback - what this customer has sent us before
+app.get('/api/feedback', async (req, res) => {
+  const db = await getDb();
+  const user = await getUserFromToken(db, req);
+  if (!user) return res.status(401).json({ error: 'Not signed in.' });
+
+  res.json(
+    (db.data.feedback || [])
+      .filter((entry) => entry.userId === user.id)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .slice(0, 20)
+  );
+});
+
+// GET /api/admin/feedback - the kitchen's inbox
+app.get('/api/admin/feedback', async (req, res) => {
+  if (req.headers['x-admin-key'] !== ADMIN_KEY) {
+    return res.status(403).json({ error: 'Invalid admin key.' });
+  }
+  const db = await getDb();
+  res.json(
+    (db.data.feedback || [])
+      .slice()
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .slice(0, 200)
+  );
+});
+
+// POST /api/admin/feedback/:id/handled - mark one as dealt with
+app.post('/api/admin/feedback/:id/handled', async (req, res) => {
+  if (req.headers['x-admin-key'] !== ADMIN_KEY) {
+    return res.status(403).json({ error: 'Invalid admin key.' });
+  }
+  const db = await getDb();
+  const entry = (db.data.feedback || []).find((item) => item.id === req.params.id);
+  if (!entry) return res.status(404).json({ error: 'Feedback not found.' });
+
+  entry.handled = req.body?.handled !== false;
+  entry.handledAt = entry.handled ? new Date().toISOString() : null;
+  await db.write();
+  res.json(entry);
 });
 
 // PATCH /api/orders/:id/cancel - customer cancellation before fulfillment
