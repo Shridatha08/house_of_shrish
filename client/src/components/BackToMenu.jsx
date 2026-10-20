@@ -10,7 +10,7 @@ export default function BackToMenu({ className = '' }) {
       </span>
       <span className="back-to-menu-text">
         <span className="back-to-menu-kicker">Back to</span>
-        <span className="back-to-menu-label">Our Menu</span>
+        <span className="back-to-menu-label">Menu</span>
       </span>
     </Link>
   );
