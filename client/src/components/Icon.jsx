@@ -48,6 +48,26 @@ const PATHS = {
       <path d="M10 8.5 6 12l4 3.5M6 12h8.5" />
     </>
   ),
+  crosshair: (
+    <>
+      <circle cx="12" cy="12" r="6.5" />
+      <circle cx="12" cy="12" r="1.8" />
+      <path d="M12 2v3.5M12 18.5V22M2 12h3.5M18.5 12H22" />
+    </>
+  ),
+  map: (
+    <>
+      <path d="M3.5 6.5 9 4.5l6 2 5.5-2v13l-5.5 2-6-2-5.5 2z" />
+      <path d="M9 4.5v13M15 6.5v13" />
+    </>
+  ),
+  pin: (
+    <>
+      <path d="M12 21.5s6.5-6.1 6.5-10.5a6.5 6.5 0 1 0-13 0c0 4.4 6.5 10.5 6.5 10.5z" />
+      <circle cx="12" cy="11" r="2.4" />
+    </>
+  ),
+  close: <path d="M6.5 6.5l11 11M17.5 6.5l-11 11" />,
 };
 
 export default function Icon({ name, size = 20, className = '' }) {

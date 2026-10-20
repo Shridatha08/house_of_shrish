@@ -4,7 +4,7 @@ import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 import { placeOrder, getWallet } from '../api';
 import { walletSplit } from '../wallet';
-import LocationPicker, { reverseGeocode } from '../components/LocationPicker';
+import LocationPicker from '../components/LocationPicker';
 
 function todayIST() {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -28,7 +28,6 @@ export default function Checkout() {
   const [subscriptionStartDate, setSubscriptionStartDate] = useState(todayIST);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [locating, setLocating] = useState(false);
   const [alternateDelivery, setAlternateDelivery] = useState(false);
   const [walletBalance, setWalletBalance] = useState(0);
   const [useWallet, setUseWallet] = useState(false);
@@ -70,33 +69,6 @@ export default function Checkout() {
     setPincode(alternate ? '' : user?.pincode || '');
   }
 
-  function useMyLocation() {
-    if (!navigator.geolocation) {
-      setError('This browser cannot share your location. Please pick it on the map instead.');
-      return;
-    }
-    setLocating(true);
-    setError('');
-    navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        const picked = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        setPosition(picked);
-        try {
-          const resolved = await reverseGeocode(picked);
-          setAddress(resolved.address);
-          if (resolved.pincode) setPincode(resolved.pincode);
-        } catch {
-          setError('Found you, but not your address. Please type it below.');
-        } finally {
-          setLocating(false);
-        }
-      },
-      () => {
-        setLocating(false);
-        setError('Could not access your location. Please pick it on the map instead.');
-      }
-    );
-  }
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -246,12 +218,7 @@ export default function Checkout() {
           </label>
         )}
         <div className="location-section">
-          <div className="location-header">
-            <span>Pin your location</span>
-            <button type="button" className="btn-link" onClick={useMyLocation} disabled={locating}>
-              {locating ? 'Finding you…' : 'Use my current location'}
-            </button>
-          </div>
+          <span className="location-header">Pin your location</span>
           <LocationPicker
             position={position}
             onChange={setPosition}

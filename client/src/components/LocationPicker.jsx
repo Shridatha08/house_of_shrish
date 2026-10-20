@@ -5,6 +5,7 @@ import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png';
 import markerIcon from 'leaflet/dist/images/marker-icon.png';
 import markerShadow from 'leaflet/dist/images/marker-shadow.png';
 import 'leaflet/dist/leaflet.css';
+import Icon from './Icon';
 
 // Fix default marker icon paths (Vite doesn't resolve them automatically)
 const defaultIcon = L.icon({
@@ -73,6 +74,39 @@ export default function LocationPicker({ position, onChange, onAddressResolved }
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState('');
   const [searchedPosition, setSearchedPosition] = useState(null);
+  // Collapsed to start with. A 280px map above the Place order button pushed
+  // the whole form off the first screen.
+  const [showMap, setShowMap] = useState(false);
+  const [locating, setLocating] = useState(false);
+
+  function useMyLocation() {
+    if (!navigator.geolocation) {
+      setSearchError('This browser cannot share your location. Pick it on the map instead.');
+      setShowMap(true);
+      return;
+    }
+    setLocating(true);
+    setSearchError('');
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const picked = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        onChange(picked);
+        setSearchedPosition(picked);
+        try {
+          onAddressResolved?.(await reverseGeocode(picked));
+        } catch {
+          setSearchError('Found you, but not your address. Please type it below.');
+        } finally {
+          setLocating(false);
+        }
+      },
+      () => {
+        setLocating(false);
+        setSearchError('Could not access your location. Pick it on the map instead.');
+        setShowMap(true);
+      }
+    );
+  }
 
   async function runSearch() {
     if (!query.trim()) return;
@@ -118,48 +152,71 @@ export default function LocationPicker({ position, onChange, onAddressResolved }
   }
 
   return (
-    <div className="map-wrapper">
-      <div className="location-search">
-        <input
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault();
-              runSearch();
-            }
-          }}
-          placeholder="Search for an area, street, or landmark"
-        />
-        <button type="button" onClick={runSearch} disabled={searching}>
-          {searching ? 'Searching…' : 'Search'}
+    <div className="location-picker">
+      <div className="location-actions">
+        <button type="button" className="btn-add location-btn" onClick={useMyLocation} disabled={locating}>
+          <Icon name="crosshair" size={18} />
+          {locating ? 'Finding you…' : 'Use my location'}
+        </button>
+        <button type="button" className="btn-add location-btn" onClick={() => setShowMap((open) => !open)}>
+          <Icon name={showMap ? 'close' : 'map'} size={18} />
+          {showMap ? 'Hide map' : 'Pick on map'}
         </button>
       </div>
 
-      {results.length > 0 && (
-        <ul className="location-results">
-          {results.map((result) => (
-            <li key={result.place_id}>
-              <button type="button" onClick={() => selectResult(result)}>
-                {result.display_name}
-              </button>
-            </li>
-          ))}
-        </ul>
+      {position && !showMap && (
+        <p className="location-pinned">
+          <Icon name="pin" size={16} />
+          Pinned at {position.lat.toFixed(5)}, {position.lng.toFixed(5)}
+        </p>
       )}
-      {searchError && <p className="status-text error">{searchError}</p>}
 
-      <MapContainer center={center} zoom={13} style={{ height: 280, width: '100%', borderRadius: 12 }}>
-        <TileLayer
-          attribution='&copy; OpenStreetMap contributors'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        />
-        <ClickHandler onPick={pickPoint} />
-        <RecenterOnChange position={searchedPosition} />
-        {position && <Marker position={position} icon={defaultIcon} />}
-      </MapContainer>
-      <p className="map-hint">Search above or tap on the map to drop a pin at your delivery location.</p>
+      {showMap && (
+        <div className="map-wrapper">
+          <div className="location-search">
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  runSearch();
+                }
+              }}
+              placeholder="Search for an area, street, or landmark"
+            />
+            <button type="button" onClick={runSearch} disabled={searching}>
+              {searching ? 'Searching…' : 'Search'}
+            </button>
+          </div>
+
+          {results.length > 0 && (
+            <ul className="location-results">
+              {results.map((result) => (
+                <li key={result.place_id}>
+                  <button type="button" onClick={() => selectResult(result)}>
+                    {result.display_name}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <MapContainer center={center} zoom={position ? 16 : 13} style={{ height: 280, width: '100%', borderRadius: 12 }}>
+            <TileLayer
+              attribution='&copy; OpenStreetMap contributors'
+              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            />
+            <ClickHandler onPick={pickPoint} />
+            <RecenterOnChange position={searchedPosition || position} />
+            {position && <Marker position={position} icon={defaultIcon} />}
+          </MapContainer>
+          <p className="map-hint">Tap the map to move your delivery pin. Add flat number and landmark to the address above.</p>
+        </div>
+      )}
+
+      {searchError && <p className="status-text error">{searchError}</p>}
     </div>
   );
 }
