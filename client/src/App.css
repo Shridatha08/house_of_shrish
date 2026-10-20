@@ -597,45 +597,28 @@
   transform: translateX(-2px);
 }
 
-/* The crest and the arrow share one circle: the arrow slides over the mark on
-   hover, so the brand is what you see at rest. */
 .back-to-menu-mark {
-  position: relative;
-  width: 34px;
-  height: 34px;
-  flex: 0 0 34px;
-  border-radius: 50%;
-  overflow: hidden;
-  background: #f3e6c8;
-}
-
-.back-to-menu-mark img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  padding: 5px;
-  transition: opacity 0.18s;
-}
-
-.back-to-menu-arrow {
-  position: absolute;
-  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #3a2a12;
-  opacity: 0;
-  transition: opacity 0.18s;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  /* Squircle rather than a circle, matching the icon it was taken from. */
+  border-radius: 32%;
+  background: #e8552d;
+  transition: background 0.18s;
 }
 
-.back-to-menu:hover .back-to-menu-mark img,
-.back-to-menu:focus-visible .back-to-menu-mark img {
-  opacity: 0.15;
+.back-to-menu-mark svg {
+  width: 20px;
+  height: 20px;
+  fill: #fff;
 }
 
-.back-to-menu:hover .back-to-menu-arrow,
-.back-to-menu:focus-visible .back-to-menu-arrow {
-  opacity: 1;
+.back-to-menu:hover .back-to-menu-mark,
+.back-to-menu:focus-visible .back-to-menu-mark {
+  background: #cf4420;
 }
 
 .back-to-menu-text {
