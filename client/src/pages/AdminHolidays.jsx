@@ -43,7 +43,7 @@ export default function AdminHolidays() {
   const [orderingPaused, setOrderingPaused] = useState(false);
   const [dailyOrderCapacity, setDailyOrderCapacity] = useState('50');
   const [lunchCutoffTime, setLunchCutoffTime] = useState('11:00');
-  const [dinnerCutoffTime, setDinnerCutoffTime] = useState('18:30');
+  const [dinnerCutoffTime, setDinnerCutoffTime] = useState('18:00');
   const [kitchenClosedDates, setKitchenClosedDates] = useState('');
   const [deliveryTimeSlots, setDeliveryTimeSlots] = useState('11:00-13:00,18:00-20:00');
   const [menuItems, setMenuItems] = useState([]);
@@ -105,7 +105,7 @@ export default function AdminHolidays() {
           setOrderingPaused(Boolean(s.orderingPaused));
           setDailyOrderCapacity(String(s.dailyOrderCapacity || 50));
           setLunchCutoffTime(s.lunchCutoffTime || '11:00');
-          setDinnerCutoffTime(s.dinnerCutoffTime || '18:30');
+          setDinnerCutoffTime(s.dinnerCutoffTime || '18:00');
           setKitchenClosedDates((s.kitchenClosedDates || []).join(','));
           setDeliveryTimeSlots((s.deliveryTimeSlots || []).join(','));
         })

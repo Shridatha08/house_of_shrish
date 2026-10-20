@@ -557,7 +557,7 @@ function getSettings(data) {
     kitchenClosedDates: [],
     dailyOrderCapacity: 50,
     lunchCutoffTime: '11:00',
-    dinnerCutoffTime: '18:30',
+    dinnerCutoffTime: '18:00',
     deliveryTimeSlots: ['11:00-13:00', '18:00-20:00'],
     ...(data.settings || {})
   };

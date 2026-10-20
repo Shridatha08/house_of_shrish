@@ -11,7 +11,7 @@ export function formatTime(hhmm) {
 
 export function faqEntries(config) {
   const lunch = formatTime(config?.lunchCutoffTime || '11:00');
-  const dinner = formatTime(config?.dinnerCutoffTime || '18:30');
+  const dinner = formatTime(config?.dinnerCutoffTime || '18:00');
   return [
     {
       question: 'By when do I need to order?',

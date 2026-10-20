@@ -67,7 +67,7 @@ export default function Menu() {
     const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(clock));
     const current = `${parts.find((part) => part.type === 'hour').value}:${parts.find((part) => part.type === 'minute').value}`;
     if (current < (storeConfig.lunchCutoffTime || '11:00')) return 'Lunch';
-    if (current < (storeConfig.dinnerCutoffTime || '18:30')) return 'Dinner';
+    if (current < (storeConfig.dinnerCutoffTime || '18:00')) return 'Dinner';
     return null;
   }
 
@@ -143,7 +143,7 @@ export default function Menu() {
                       <h3>{item.name}</h3>
                     </div>
                     <p className="menu-desc">{item.description}</p>
-                    {item.name.toLowerCase() === 'single meal' && <p className="status-text">{availableService() ? `Order for ${availableService()} · ${availableService() === 'Lunch' ? storeConfig.lunchCutoffTime || '11:00' : storeConfig.dinnerCutoffTime || '18:30'} IST cutoff` : 'Single Meal ordering is closed for today.'}</p>}
+                    {item.name.toLowerCase() === 'single meal' && <p className="status-text">{availableService() ? `Order for ${availableService()} · ${availableService() === 'Lunch' ? storeConfig.lunchCutoffTime || '11:00' : storeConfig.dinnerCutoffTime || '18:00'} IST cutoff` : 'Single Meal ordering is closed for today.'}</p>}
                     {item.variants?.length > 0 ? (
                       <p className="menu-price">₹{Math.min(...item.variants.map((variant) => variant.price))} - ₹{Math.max(...item.variants.map((variant) => variant.price))}</p>
                     ) : <p className="menu-price">₹{item.price}</p>}
