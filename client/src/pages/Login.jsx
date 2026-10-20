@@ -199,7 +199,6 @@ export default function Login() {
                 maxLength={20}
                 autoCapitalize="characters"
                 autoCorrect="off"
-                placeholder="e.g. ESHWAR9747"
               />
               <small>Both of you get ₹50 once your first order is confirmed.</small>
             </label>
