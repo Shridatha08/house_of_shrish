@@ -1445,6 +1445,49 @@ button.subscription-calendar-day:disabled {
   gap: 10px;
 }
 
+.btn-upi-app {
+  display: block;
+  width: 100%;
+  max-width: 320px;
+  box-sizing: border-box;
+  background: #e8552d;
+  color: #fff;
+  border: 2px solid #e8552d;
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 1rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.pay-wide {
+  width: 100%;
+  max-width: 320px;
+}
+
+.btn-upi-app.secondary {
+  background: transparent;
+  color: #e8552d;
+}
+
+.pay-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  max-width: 320px;
+  margin: 4px 0;
+  color: #888;
+  font-size: 0.85rem;
+}
+
+.pay-divider::before,
+.pay-divider::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid #ddd;
+}
+
 .upi-id {
   font-size: 0.85rem;
   color: #555;

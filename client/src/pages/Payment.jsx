@@ -101,13 +101,15 @@ export default function Payment() {
       {expired ? <p className="status-text error">This unpaid order has expired. Place a new order before paying.</p> : order.status === 'pending_payment' ? (
         <>
           {onlinePayment && (
-            <>
-              <button className="btn-primary" type="button" disabled={redirecting} onClick={handlePayOnline}>
-                {redirecting ? 'Opening secure checkout...' : `Pay ₹${order.total} online (auto-verified)`}
-              </button>
-              <p className="status-text">or scan the QR below and confirm manually</p>
-            </>
+            <button className="btn-primary pay-wide" type="button" disabled={redirecting} onClick={handlePayOnline}>
+              {redirecting ? 'Opening secure checkout...' : `Pay ₹${order.total} online (auto-verified)`}
+            </button>
           )}
+          {/* Opens GPay, PhonePe, Paytm etc. on phones; desktops fall back to the QR. */}
+          <a className={`btn-upi-app${onlinePayment ? ' secondary' : ''}`} href={order.upiUri}>
+            Pay ₹{order.total} with a UPI app
+          </a>
+          <p className="pay-divider">or scan</p>
           <div className="qr-card">
             <QRCodeSVG value={order.upiUri} size={220} marginSize={2} />
             <p className="upi-id">Pay to: House of Shrish (houseofshrish@ybl)</p>
