@@ -13,3 +13,15 @@ services:
         sync: false
       - key: MONGODB_DB_NAME
         value: house_of_shrish
+      # Optional YouPI-PG UPI gateway. Leave YOUPI_API_URL unset to keep only
+      # the manual QR flow. Point YouPI's merchant webhook at
+      # https://<this-service>/api/payments/youpi/webhook and use the same
+      # webhook secret here.
+      - key: YOUPI_API_URL
+        sync: false
+      - key: YOUPI_WEBHOOK_SECRET
+        sync: false
+      - key: YOUPI_MERCHANT_ID
+        sync: false
+      - key: PUBLIC_SITE_URL
+        value: https://house-of-shrish.vercel.app

@@ -58,7 +58,7 @@ function mergeRecords(current, base, next) {
   return result;
 }
 
-function application(data = fixture()) {  let state = structuredClone(data);
+function application(data = fixture(), { env = {}, fetch } = {}) {  let state = structuredClone(data);
   let clock = new Date(now).getTime();
   const routes = new Map();
   const notifications = [];
@@ -69,9 +69,11 @@ function application(data = fixture()) {  let state = structuredClone(data);
   }
   const express = () => app;
   express.json = () => () => {};
+  express.raw = () => () => {};
   const context = {
-    express, cors: () => () => {}, crypto, Buffer, structuredClone,
-    process: { env: { ADMIN_KEY: 'test-admin' } }, console,
+    express, cors: () => () => {}, crypto, Buffer, structuredClone, AbortSignal,
+    fetch: fetch || (async () => { throw new Error('No network in tests.'); }),
+    process: { env: { ADMIN_KEY: 'test-admin', ...env } }, console,
     // push.js is imported by index.js; the sandbox strips imports, so record instead of sending.
     notifyAdmins: async (db, message) => { notifications.push({ audience: 'admin', ...message }); },
     notifyUser: async (db, userId, message) => { notifications.push({ audience: 'user', userId, ...message }); },
@@ -2192,4 +2194,157 @@ test('a long note is trimmed in the push but kept whole in the inbox', async () 
   assert.match(note.body, /…$/);
   const inbox = await app.request('get', '/api/admin/feedback', {}, {}, adminHeaders);
   assert.equal(inbox.body[0].message, long);
+});
+
+const youpiEnv = { YOUPI_API_URL: 'https://pay.example.test/', YOUPI_WEBHOOK_SECRET: 'whsec-test', YOUPI_MERCHANT_ID: 'merchant-1' };
+
+function youpiGateway(response = {}) {
+  const calls = [];
+  let counter = 0;
+  const fetch = async (url, init) => {
+    calls.push({ url, init, body: JSON.parse(init.body) });
+    counter += 1;
+    const body = { paymentId: `pay-${counter}`, status: 'INITIATED', checkoutUrl: `https://pay.example.test/checkout/pay-${counter}`, ...response.body };
+    return { ok: response.ok ?? true, status: response.status ?? 201, json: async () => body };
+  };
+  return { fetch, calls };
+}
+
+function signedWebhook(payload, secret = youpiEnv.YOUPI_WEBHOOK_SECRET) {
+  const raw = Buffer.from(JSON.stringify(payload));
+  const signature = 'sha256=' + crypto.createHmac('sha256', secret).update(raw).digest('hex');
+  return [raw, { 'x-gateway-signature': signature, 'x-gateway-event': payload.event }];
+}
+
+async function youpiOrder(gateway = youpiGateway()) {
+  const app = application(fixture(), { env: youpiEnv, fetch: gateway.fetch });
+  const created = await purchase(app);
+  const id = created.body.order.id;
+  const started = await app.request('post', '/api/orders/:id/online-payment', {}, { id });
+  return { app, id, started, gateway };
+}
+
+function successPayload(id, overrides = {}) {
+  return { event: 'SUCCESS', paymentId: 'pay-1', orderId: `HOS-${id}`, amount: '129.00', amountPaise: 12900, method: 'UPI', utr: '123456789012', verificationLevel: 1, ...overrides };
+}
+
+test('online payment stays off until the gateway is configured', async () => {
+  const app = application();
+  assert.equal((await app.request('get', '/api/store-config')).body.onlinePayment, false);
+  const created = await purchase(app);
+  assert.equal((await app.request('post', '/api/orders/:id/online-payment', {}, { id: created.body.order.id })).code, 404);
+  const [raw, headers] = signedWebhook(successPayload(created.body.order.id));
+  assert.equal((await app.request('post', '/api/payments/youpi/webhook', raw, {}, headers)).code, 404);
+  assert.equal(app.state().orders[0].status, 'pending_payment');
+});
+
+test('starting online payment opens a gateway session for the exact order total', async () => {
+  const { app, id, started, gateway } = await youpiOrder();
+  assert.equal((await app.request('get', '/api/store-config')).body.onlinePayment, true);
+  assert.equal(started.code, 200);
+  assert.equal(started.body.checkoutUrl, 'https://pay.example.test/checkout/pay-1');
+  const [call] = gateway.calls;
+  assert.equal(call.url, 'https://pay.example.test/api/v1/payments');
+  assert.equal(call.init.headers['X-Merchant-Key'], 'whsec-test');
+  assert.equal(call.init.headers['X-Merchant-Id'], 'merchant-1');
+  assert.equal(call.body.orderId, `HOS-${id}`);
+  assert.equal(call.body.amount, '129.00');
+  assert.equal(call.body.customer.phoneNumber, customer.phone);
+  assert.match(call.body.returnUrl, new RegExp(`/payment/${id}$`));
+  assert.deepEqual(app.state().orders[0].youpi.paymentIds, ['pay-1']);
+  // A retry after the gateway session lapsed is remembered too.
+  await app.request('post', '/api/orders/:id/online-payment', {}, { id });
+  assert.deepEqual(app.state().orders[0].youpi.paymentIds, ['pay-1', 'pay-2']);
+});
+
+test('online payment needs order access and an order that is still payable', async () => {
+  const gateway = youpiGateway();
+  const app = application(fixture(), { env: youpiEnv, fetch: gateway.fetch });
+  const guest = await app.request('post', '/api/orders', { items: [{ id: 6, quantity: 1, customisation: '200g' }], customer }, {}, {});
+  const id = guest.body.order.id;
+  assert.equal((await app.request('post', '/api/orders/:id/online-payment', {}, { id }, {})).code, 403);
+  assert.equal((await app.request('post', '/api/orders/:id/online-payment', {}, { id }, { 'x-order-token': guest.body.accessToken })).code, 200);
+  app.clock('2026-10-10T04:31:00Z');
+  assert.equal((await app.request('post', '/api/orders/:id/online-payment', {}, { id }, { 'x-order-token': guest.body.accessToken })).code, 409);
+});
+
+test('a gateway failure or unsafe checkout URL falls back to the QR', async () => {
+  const failed = await youpiOrder(youpiGateway({ ok: false, status: 500, body: { error: 'boom' } }));
+  assert.equal(failed.started.code, 502);
+  assert.equal(failed.app.state().orders[0].youpi, undefined);
+  const unsafe = await youpiOrder(youpiGateway({ body: { checkoutUrl: 'javascript:alert(1)' } }));
+  assert.equal(unsafe.started.code, 502);
+});
+
+test('a signed success moves the order to admin review with the UTR, once', async () => {
+  const { app, id } = await youpiOrder();
+  const [raw, headers] = signedWebhook(successPayload(id));
+  const delivered = await app.request('post', '/api/payments/youpi/webhook', raw, {}, headers);
+  assert.equal(delivered.code, 200);
+  const order = app.state().orders[0];
+  assert.equal(order.status, 'payment_review');
+  assert.equal(order.paymentStatus, 'awaiting_verification');
+  assert.equal(order.youpi.utr, '123456789012');
+  assert.equal(app.notifications.at(-1).title, 'UPI payment received');
+  assert.match(app.notifications.at(-1).body, /UTR 123456789012/);
+  // Still needs the admin before invoices or fulfilment.
+  assert.equal((await app.request('get', '/api/orders/:id/invoice', {}, { id })).code, 409);
+
+  const before = app.notifications.length;
+  const replayed = await app.request('post', '/api/payments/youpi/webhook', raw, {}, headers);
+  assert.equal(replayed.body.duplicate, true);
+  assert.equal(app.notifications.length, before);
+
+  assert.equal((await app.request('patch', '/api/admin/orders/:id/status', { status: 'paid' }, { id }, adminHeaders)).code, 200);
+  assert.equal(app.state().orders[0].paymentStatus, 'verified');
+});
+
+test('webhooks with a bad signature, wrong session, or non-UPI method change nothing', async () => {
+  const { app, id } = await youpiOrder();
+  const [raw] = signedWebhook(successPayload(id));
+  const forged = await app.request('post', '/api/payments/youpi/webhook', raw, {}, { 'x-gateway-signature': 'sha256=' + '0'.repeat(64) });
+  assert.equal(forged.code, 401);
+  const [otherSecret, otherHeaders] = signedWebhook(successPayload(id), 'not-the-secret');
+  assert.equal((await app.request('post', '/api/payments/youpi/webhook', otherSecret, {}, otherHeaders)).code, 401);
+  for (const overrides of [{ paymentId: 'pay-unknown' }, { method: 'COD' }, { event: 'EXPIRED' }, { orderId: '1' }]) {
+    const [body, headers] = signedWebhook(successPayload(id, overrides));
+    const result = await app.request('post', '/api/payments/youpi/webhook', body, {}, headers);
+    assert.equal(result.code, 200);
+    assert.ok(result.body.ignored);
+  }
+  assert.equal(app.state().orders[0].status, 'pending_payment');
+});
+
+test('a gateway amount that does not match the order is flagged, not accepted', async () => {
+  const { app, id } = await youpiOrder();
+  const [raw, headers] = signedWebhook(successPayload(id, { amount: '1.00', amountPaise: 100 }));
+  const result = await app.request('post', '/api/payments/youpi/webhook', raw, {}, headers);
+  assert.equal(result.body.mismatch, true);
+  const order = app.state().orders[0];
+  assert.equal(order.status, 'pending_payment');
+  assert.equal(order.youpi.utr, undefined);
+  assert.equal(order.youpi.mismatch.amountPaise, 100);
+  assert.equal(app.notifications.at(-1).title, 'UPI amount mismatch');
+});
+
+test('a gateway success for a cancelled order is surfaced without reviving it', async () => {
+  const { app, id } = await youpiOrder();
+  await app.request('patch', '/api/orders/:id/cancel', {}, { id });
+  const [raw, headers] = signedWebhook(successPayload(id));
+  await app.request('post', '/api/payments/youpi/webhook', raw, {}, headers);
+  assert.equal(app.state().orders[0].status, 'cancelled');
+  assert.equal(app.state().orders[0].youpi.utr, '123456789012');
+  assert.equal(app.notifications.at(-1).title, 'UPI payment needs attention');
+});
+
+test('a success without a UTR is still recorded only once', async () => {
+  const { app, id } = await youpiOrder();
+  const [raw, headers] = signedWebhook(successPayload(id, { utr: '' }));
+  await app.request('post', '/api/payments/youpi/webhook', raw, {}, headers);
+  assert.equal(app.state().orders[0].status, 'payment_review');
+  assert.doesNotMatch(app.notifications.at(-1).body, /UTR/);
+  const before = app.notifications.length;
+  const replayed = await app.request('post', '/api/payments/youpi/webhook', raw, {}, headers);
+  assert.equal(replayed.body.duplicate, true);
+  assert.equal(app.notifications.length, before);
 });

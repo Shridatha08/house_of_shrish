@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
 import BackToMenu from '../components/BackToMenu';
 import { QRCodeSVG } from 'qrcode.react';
-import { getOrder, markOrderPaid } from '../api';
+import { getOrder, getStoreConfig, markOrderPaid, startOnlinePayment } from '../api';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 
@@ -20,6 +20,12 @@ export default function Payment() {
   const [loading, setLoading] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
   const [clock, setClock] = useState(() => Date.now());
+  const [onlinePayment, setOnlinePayment] = useState(false);
+  const [redirecting, setRedirecting] = useState(false);
+
+  useEffect(() => {
+    getStoreConfig().then((config) => setOnlinePayment(Boolean(config.onlinePayment))).catch(() => {});
+  }, []);
 
   useEffect(() => {
     const timer = setInterval(() => setClock(Date.now()), 1000);
@@ -39,6 +45,18 @@ export default function Payment() {
     return () => { cancelled = true; };
   }, [id, token, ready, accessToken, refreshKey]);
 
+  // After the gateway sends the customer back, its webhook may land a moment
+  // later, so keep checking quietly until the order moves on.
+  const awaitingGateway = order?.status === 'pending_payment' && order?.youpi?.paymentIds?.length > 0 &&
+    clock - new Date(order.createdAt).getTime() < 30 * 60 * 1000;
+  useEffect(() => {
+    if (!awaitingGateway) return;
+    const timer = setInterval(() => {
+      getOrder(id, token, accessToken).then(setOrder).catch(() => {});
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [awaitingGateway, id, token, accessToken]);
+
   async function handleConfirmPaid() {
     setSubmitting(true);
     setError('');
@@ -50,6 +68,20 @@ export default function Payment() {
       setError(err.message);
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handlePayOnline() {
+    setRedirecting(true);
+    setError('');
+    try {
+      const { checkoutUrl } = await startOnlinePayment(id, token, accessToken);
+      clearCart();
+      // The gateway returns the customer to this page once the payment settles.
+      window.location.assign(checkoutUrl);
+    } catch (err) {
+      setError(err.message);
+      setRedirecting(false);
     }
   }
 
@@ -68,6 +100,14 @@ export default function Payment() {
       )}
       {expired ? <p className="status-text error">This unpaid order has expired. Place a new order before paying.</p> : order.status === 'pending_payment' ? (
         <>
+          {onlinePayment && (
+            <>
+              <button className="btn-primary" type="button" disabled={redirecting} onClick={handlePayOnline}>
+                {redirecting ? 'Opening secure checkout...' : `Pay ₹${order.total} online (auto-verified)`}
+              </button>
+              <p className="status-text">or scan the QR below and confirm manually</p>
+            </>
+          )}
           <div className="qr-card">
             <QRCodeSVG value={order.upiUri} size={220} marginSize={2} />
             <p className="upi-id">Pay to: House of Shrish (houseofshrish@ybl)</p>
@@ -79,7 +119,8 @@ export default function Payment() {
       ) : (
         <>
           <p className="status-text">{order.status.replaceAll('_', ' ')}</p>
-          {order.status === 'payment_review' && <p className="status-text">Payment will be verified by the admin. <a href={`${WHATSAPP_LINK}?text=${encodeURIComponent(`Payment proof for order #${order.orderNumber || order.id}`)}`} target="_blank" rel="noopener noreferrer">Share payment proof</a></p>}
+          {order.status === 'payment_review' && order.youpi?.utr && <p className="status-text">UPI payment detected (UTR {order.youpi.utr}). The admin will confirm it shortly.</p>}
+          {order.status === 'payment_review' && !order.youpi?.utr && <p className="status-text">Payment will be verified by the admin. <a href={`${WHATSAPP_LINK}?text=${encodeURIComponent(`Payment proof for order #${order.orderNumber || order.id}`)}`} target="_blank" rel="noopener noreferrer">Share payment proof</a></p>}
           {paid && <Link to={`/invoice/${id}`} state={{ accessToken }} className="btn-link">View Invoice</Link>}
         </>
       )}

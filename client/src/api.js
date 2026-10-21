@@ -33,6 +33,9 @@ export const getOrder = (id, token, accessToken) =>
 export const markOrderPaid = (id, token, accessToken) =>
   request(`/api/orders/${id}/mark-paid`, { method: 'PATCH', headers: orderHeaders(token, accessToken) });
 
+export const startOnlinePayment = (id, token, accessToken) =>
+  request(`/api/orders/${id}/online-payment`, { method: 'POST', headers: orderHeaders(token, accessToken) });
+
 export const getInvoice = (id, token, accessToken) =>
   request(`/api/orders/${id}/invoice`, { headers: orderHeaders(token, accessToken) });
 

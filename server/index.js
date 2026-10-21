@@ -13,6 +13,17 @@ if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
 const UPI_ID = 'houseofshrish@ybl';
 const MERCHANT_NAME = 'House of Shrish';
 
+// Optional self-hosted YouPI-PG gateway (https://github.com/youpi-pg/YouPI-PG).
+// Off unless both the gateway URL and its webhook secret are set; the manual
+// "I've paid" flow keeps working either way. A YouPI success only moves the
+// order to payment_review with the UTR attached — an admin still approves it.
+const YOUPI_API_URL = (process.env.YOUPI_API_URL || '').replace(/\/+$/, '');
+const YOUPI_MERCHANT_ID = process.env.YOUPI_MERCHANT_ID || '';
+const YOUPI_WEBHOOK_SECRET = process.env.YOUPI_WEBHOOK_SECRET || '';
+const YOUPI_ENABLED = Boolean(YOUPI_API_URL && YOUPI_WEBHOOK_SECRET);
+const PUBLIC_SITE_URL = (process.env.PUBLIC_SITE_URL || 'https://house-of-shrish.vercel.app').replace(/\/+$/, '');
+const YOUPI_ORDER_PREFIX = 'HOS-';
+
 // Malleshpalya kitchen. Override with env vars to set an exact rooftop pin.
 const KITCHEN_LAT = Number(process.env.KITCHEN_LAT ?? 12.9744129);
 const KITCHEN_LNG = Number(process.env.KITCHEN_LNG ?? 77.6743533);
@@ -40,6 +51,82 @@ function buildOrderNumber(date, dailySequence) {
 }
 
 app.use(cors());
+
+// POST /api/payments/youpi/webhook - signed payment outcome from the YouPI gateway.
+// Registered before express.json() because the HMAC covers the raw bytes.
+app.post('/api/payments/youpi/webhook', express.raw({ type: () => true, limit: '64kb' }), async (req, res) => {
+  if (!YOUPI_ENABLED) return res.status(404).json({ error: 'Not found.' });
+  const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+  const signature = String(req.headers['x-gateway-signature'] || '');
+  const expected = 'sha256=' + crypto.createHmac('sha256', YOUPI_WEBHOOK_SECRET).update(raw).digest('hex');
+  if (signature.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) {
+    return res.status(401).json({ error: 'Invalid webhook signature.' });
+  }
+  let payload;
+  try {
+    payload = JSON.parse(raw.toString('utf8'));
+  } catch {
+    return res.status(400).json({ error: 'Invalid JSON.' });
+  }
+
+  // Anything this server cannot act on is still acknowledged, so the gateway
+  // does not keep retrying it.
+  const ignore = (reason) => res.json({ received: true, ignored: reason });
+  if (payload.event !== 'SUCCESS') return ignore('event');
+  // The checkout can also offer cash on delivery; only an observed UPI credit counts.
+  if ((payload.method || 'UPI') !== 'UPI') return ignore('method');
+  const ref = String(payload.orderId || '');
+  if (!ref.startsWith(YOUPI_ORDER_PREFIX)) return ignore('order');
+  const orderId = Number(ref.slice(YOUPI_ORDER_PREFIX.length));
+
+  const db = await getDb();
+  const order = db.data.orders.find((o) => o.id === orderId);
+  if (!order?.youpi?.paymentIds?.includes(payload.paymentId)) return ignore('order');
+  // The signature does not cover the timestamp, so a captured delivery can be
+  // replayed; recording the payment once is what makes replays harmless.
+  if (order.youpi.status === 'SUCCESS' || order.youpi.mismatch) return res.json({ received: true, duplicate: true });
+
+  const nowIso = new Date().toISOString();
+  const expectedPaise = Math.round(Number(order.total) * 100);
+  const utr = String(payload.utr || '').slice(0, 32);
+  if (Number(payload.amountPaise) !== expectedPaise) {
+    order.youpi.mismatch = { paymentId: payload.paymentId, amountPaise: Number(payload.amountPaise), utr, at: nowIso };
+    await db.write();
+    await notifyAdmins(db, {
+      title: 'UPI amount mismatch',
+      body: `#${order.orderNumber} expected ₹${order.total} but the gateway saw ₹${payload.amount}${utr ? ` (UTR ${utr})` : ''}. Check manually.`,
+      data: { type: 'payment_review', orderId: order.id, orderNumber: order.orderNumber }
+    });
+    return res.json({ received: true, mismatch: true });
+  }
+
+  Object.assign(order.youpi, {
+    status: 'SUCCESS',
+    paymentId: payload.paymentId,
+    utr,
+    verificationLevel: Number(payload.verificationLevel) || 0,
+    receivedAt: nowIso
+  });
+  const lapsed = order.status === 'pending_payment' && !reservesStock(order);
+  const unexpected = !['pending_payment', 'payment_review'].includes(order.status);
+  if (order.status === 'pending_payment') {
+    order.status = 'payment_review';
+    order.paymentStatus = 'awaiting_verification';
+    order.paymentSubmittedAt = nowIso;
+  }
+  await db.write();
+
+  const note = unexpected ? ` · arrived for a ${order.status.replaceAll('_', ' ')} order`
+    : lapsed ? ' · arrived after the 30-minute window, check stock'
+      : ' · auto-detected, approve to confirm';
+  await notifyAdmins(db, {
+    title: unexpected || lapsed ? 'UPI payment needs attention' : 'UPI payment received',
+    body: `#${order.orderNumber} · ₹${order.total} · ${order.customer.name}${utr ? ` · UTR ${utr}` : ''}${note}`,
+    data: { type: 'payment_review', orderId: order.id, orderNumber: order.orderNumber }
+  });
+  res.json({ received: true });
+});
+
 app.use(express.json());
 
 const rateLimitBuckets = new Map();
@@ -1360,7 +1447,8 @@ app.get('/api/store-config', async (req, res) => {
     dailyOrderCapacity: settings.dailyOrderCapacity,
     kitchenLat: KITCHEN_LAT,
     kitchenLng: KITCHEN_LNG,
-    deliveryRadiusKm: DELIVERY_RADIUS_KM
+    deliveryRadiusKm: DELIVERY_RADIUS_KM,
+    onlinePayment: YOUPI_ENABLED
   });
 });
 
@@ -2249,6 +2337,55 @@ app.patch('/api/orders/:id/mark-paid', async (req, res) => {
 
   const { accessToken, ...safeOrder } = order;
   res.json(safeOrder);
+});
+
+// POST /api/orders/:id/online-payment - open a YouPI checkout session for an unpaid order
+app.post('/api/orders/:id/online-payment', orderRateLimit, async (req, res) => {
+  if (!YOUPI_ENABLED) return res.status(404).json({ error: 'Online payment is not available.' });
+  const db = await getDb();
+  const order = db.data.orders.find((o) => o.id === Number(req.params.id));
+  if (!order) return res.status(404).json({ error: 'Order not found.' });
+  const user = await getUserFromToken(db, req);
+  if (!canAccessOrder(order, user, req)) return res.status(403).json({ error: 'You cannot update this order.' });
+  if (order.status !== 'pending_payment') return res.status(409).json({ error: 'This order is no longer awaiting payment.' });
+  if (!reservesStock(order)) return res.status(409).json({ error: 'This unpaid order has expired. Please place a new order.' });
+  if (!(Number(order.total) > 0)) return res.status(409).json({ error: 'Nothing is owed on this order.' });
+
+  let session;
+  try {
+    const response = await fetch(`${YOUPI_API_URL}/api/v1/payments`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Merchant-Key': YOUPI_WEBHOOK_SECRET,
+        ...(YOUPI_MERCHANT_ID ? { 'X-Merchant-Id': YOUPI_MERCHANT_ID } : {})
+      },
+      body: JSON.stringify({
+        orderId: `${YOUPI_ORDER_PREFIX}${order.id}`,
+        amount: Number(order.total).toFixed(2),
+        currency: 'INR',
+        description: `${MERCHANT_NAME} order #${order.orderNumber}`,
+        returnUrl: `${PUBLIC_SITE_URL}/payment/${order.id}`,
+        customer: { name: order.customer.name, fullName: order.customer.name, phoneNumber: order.customer.phone },
+        metadata: { orderNumber: order.orderNumber }
+      }),
+      signal: AbortSignal.timeout(10000)
+    });
+    session = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(`HTTP ${response.status}: ${session?.error || ''}`);
+    // Clients navigate straight to this URL, so only a web address is accepted.
+    if (!session?.paymentId || !/^https?:\/\//i.test(String(session.checkoutUrl || ''))) throw new Error('Malformed gateway response.');
+  } catch (err) {
+    console.error('YouPI create payment failed:', err.message);
+    return res.status(502).json({ error: 'Online payment is unavailable right now. Please scan the UPI QR instead.' });
+  }
+
+  order.youpi ||= { paymentIds: [] };
+  if (!order.youpi.paymentIds.includes(session.paymentId)) order.youpi.paymentIds = [...order.youpi.paymentIds, session.paymentId].slice(-20);
+  order.youpi.checkoutUrl = session.checkoutUrl;
+  order.youpi.startedAt = new Date().toISOString();
+  await db.write();
+  res.json({ paymentId: session.paymentId, checkoutUrl: session.checkoutUrl });
 });
 
 // GET /api/orders/me - authenticated customer's order history
