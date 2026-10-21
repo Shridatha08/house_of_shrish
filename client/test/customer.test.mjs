@@ -6,7 +6,7 @@ import { faqEntries, formatTime } from '../src/faq.js';
 import { deadlineMessage, deadlineRisk, daysUntilDeadline, etaText, RISK } from '../src/deadline.js';
 import { statusOf, skipAvailability, scheduleByDate, upcomingTotals, planSummary, formatMealDate, withinDays } from '../src/schedule.js';
 import { feedbackError, thanksFor } from '../src/feedback.js';
-import { formatCountdown, isPaymentUrgent, paymentWindowClosed, timeLeftToPay, PAYMENT_WINDOW_MS } from '../src/paymentWindow.js';
+import { formatCountdown, isPaymentUrgent, orderStatusText, paymentWindowClosed, timeLeftToPay, PAYMENT_WINDOW_MS } from '../src/paymentWindow.js';
 
 const subWith = (overrides = {}) => ({
   carryForwardDeadline: '2026-11-20',
@@ -277,4 +277,14 @@ test('the last five minutes are flagged as urgent', () => {
   assert.equal(isPaymentUrgent(5 * 60 * 1000), false);
   assert.equal(isPaymentUrgent(5 * 60 * 1000 - 1), true);
   assert.equal(isPaymentUrgent(null), false);
+});
+
+test('an order the server cancelled for non-payment reads as a closed window', () => {
+  const timedOut = { status: 'cancelled', cancelReason: 'payment_timeout', createdAt: new Date().toISOString() };
+  assert.equal(paymentWindowClosed(timedOut), true);
+  assert.equal(orderStatusText(timedOut), 'cancelled · not paid in time');
+  const byCustomer = { status: 'cancelled', createdAt: new Date().toISOString() };
+  assert.equal(paymentWindowClosed(byCustomer), false);
+  assert.equal(orderStatusText(byCustomer), 'cancelled');
+  assert.equal(orderStatusText({ status: 'out_for_delivery' }), 'out for delivery');
 });

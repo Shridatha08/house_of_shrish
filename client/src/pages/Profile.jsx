@@ -10,6 +10,7 @@ import DeadlineWarning from '../components/DeadlineWarning';
 import MealPlanPanel from '../components/MealPlanPanel';
 import FeedbackPanel from '../components/FeedbackPanel';
 import { formatMealDate, mealLabel, mealKey, planSummary } from '../schedule';
+import { orderStatusText } from '../paymentWindow';
 import { updateProfile, getMySubscriptions, getMyOrders, cancelOrder, requestRefund, skipSubscriptionMeal, deleteAccount, getWallet, getStoreConfig } from '../api';
 
 export default function Profile() {
@@ -257,7 +258,7 @@ export default function Profile() {
               <p className="subscription-summary-dates">
                 {order.scheduledDate ? `${order.scheduledDate} · ${order.timeSlot} · ` : 'No scheduled delivery · '}₹{order.total}
               </p>
-              <p className="subscription-summary-dates">Payment / delivery status: {order.status.replaceAll('_', ' ')}</p>
+              <p className="subscription-summary-dates">Payment / delivery status: {orderStatusText(order)}</p>
               <p className="subscription-summary-dates">{order.items.map((item) => `${item.name} × ${item.quantity}`).join(', ')}</p>
               <div className="order-actions">
                 {order.status === 'pending_payment' && <Link to={`/payment/${order.id}`} className="btn-link">Continue payment</Link>}

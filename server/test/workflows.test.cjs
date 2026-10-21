@@ -2348,3 +2348,80 @@ test('a success without a UTR is still recorded only once', async () => {
   assert.equal(replayed.body.duplicate, true);
   assert.equal(app.notifications.length, before);
 });
+
+async function sweep(app) {
+  return app.context.cancelLapsedOrders(await app.context.getDb());
+}
+
+test('unpaid orders are cancelled once the 30-minute window passes', async () => {
+  const app = application();
+  app.state().users[0].walletBalance = 50;
+  const lapsing = await app.request('post', '/api/orders', {
+    items: [{ id: 6, quantity: 1, customisation: '200g' }], customer, useWallet: true
+  });
+  const submitted = await purchase(app);
+  await app.request('patch', '/api/orders/:id/mark-paid', {}, { id: submitted.body.order.id });
+
+  app.clock('2026-10-10T04:29:59Z');
+  assert.equal((await sweep(app)).length, 0, 'not before the window closes');
+  assert.equal(app.state().orders[0].status, 'pending_payment');
+
+  app.clock('2026-10-10T04:30:00Z');
+  const fresh = await purchase(app);
+  const cancelled = await sweep(app);
+  assert.equal(cancelled.length, 1);
+  assert.equal(cancelled[0].id, lapsing.body.order.id);
+
+  const byId = (id) => app.state().orders.find((order) => order.id === id);
+  const order = byId(lapsing.body.order.id);
+  assert.equal(order.status, 'cancelled');
+  assert.equal(order.cancelReason, 'payment_timeout');
+  assert.equal(order.paymentStatus, 'unpaid');
+  assert.equal(app.state().users[0].walletBalance, 50, 'wallet credit comes back');
+  assert.equal(byId(submitted.body.order.id).status, 'payment_review', 'a claimed payment waits for the admin');
+  assert.equal(byId(fresh.body.order.id).status, 'pending_payment');
+
+  const notice = app.notifications.at(-1);
+  assert.equal(notice.audience, 'order');
+  assert.equal(notice.title, 'Order cancelled');
+  assert.match(notice.body, /not paid within 30 minutes/);
+  assert.match(notice.body, /₹50 is back in your wallet/);
+
+  assert.equal((await sweep(app)).length, 0, 'each order is cancelled once');
+  assert.equal(app.state().users[0].walletBalance, 50, 'and the credit returned once');
+  assert.equal((await app.request('patch', '/api/orders/:id/mark-paid', {}, { id: order.id })).code, 409);
+});
+
+test('a timed-out monthly order releases its pending subscription', async () => {
+  const app = application();
+  const created = await purchase(app, 2, { subscriptionStartDate: '2026-10-12' });
+  assert.equal(app.state().subscriptions.length, 1);
+  app.clock('2026-10-10T04:31:00Z');
+  await sweep(app);
+  assert.equal(app.state().orders[0].id, created.body.order.id);
+  assert.equal(app.state().orders[0].status, 'cancelled');
+  assert.equal(app.state().subscriptions[0].deactivated, true);
+});
+
+test('a gateway payment after a timeout cancellation is flagged for a refund', async () => {
+  const { app, id } = await youpiOrder();
+  app.clock('2026-10-10T04:31:00Z');
+  await sweep(app);
+  const [raw, headers] = signedWebhook(successPayload(id));
+  await app.request('post', '/api/payments/youpi/webhook', raw, {}, headers);
+  assert.equal(app.state().orders[0].status, 'cancelled');
+  assert.equal(app.notifications.at(-1).title, 'UPI payment needs attention');
+  assert.match(app.notifications.at(-1).body, /timed out and was cancelled, refund/);
+});
+
+test('the sweep can cancel lapsed orders one at a time', async () => {
+  const app = application();
+  await purchase(app, 6);
+  await purchase(app, 6);
+  app.clock('2026-10-10T04:31:00Z');
+  assert.equal((await app.context.cancelLapsedOrders(await app.context.getDb(), 1)).length, 1);
+  assert.equal(app.state().orders.filter((order) => order.status === 'cancelled').length, 1);
+  assert.equal((await app.context.cancelLapsedOrders(await app.context.getDb(), 1)).length, 1);
+  assert.equal((await app.context.cancelLapsedOrders(await app.context.getDb(), 1)).length, 0);
+  assert.equal(app.state().orders.filter((order) => order.status === 'cancelled').length, 2);
+});

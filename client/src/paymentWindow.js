@@ -1,6 +1,8 @@
 // Mirrors the server's reservesStock: an unpaid order holds its items for 30
 // minutes, after which the server refuses payment for it.
 export const PAYMENT_WINDOW_MS = 30 * 60 * 1000;
+// Set by the server when it cancels an order whose payment window ran out.
+export const PAYMENT_TIMEOUT_REASON = 'payment_timeout';
 const URGENT_MS = 5 * 60 * 1000;
 
 /// Milliseconds left to pay, or null when the order is not awaiting payment.
@@ -12,7 +14,12 @@ export function timeLeftToPay(order, now = Date.now()) {
 }
 
 export function paymentWindowClosed(order, now = Date.now()) {
-  return timeLeftToPay(order, now) === 0;
+  return order?.cancelReason === PAYMENT_TIMEOUT_REASON || timeLeftToPay(order, now) === 0;
+}
+
+export function orderStatusText(order) {
+  const status = order.status.replaceAll('_', ' ');
+  return order.status === 'cancelled' && order.cancelReason === PAYMENT_TIMEOUT_REASON ? `${status} · not paid in time` : status;
 }
 
 export function isPaymentUrgent(left) {

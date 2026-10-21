@@ -116,9 +116,10 @@ app.post('/api/payments/youpi/webhook', express.raw({ type: () => true, limit: '
   }
   await db.write();
 
-  const note = unexpected ? ` · arrived for a ${order.status.replaceAll('_', ' ')} order`
-    : lapsed ? ' · arrived after the 30-minute window, check stock'
-      : ' · auto-detected, approve to confirm';
+  const note = order.cancelReason === PAYMENT_TIMEOUT_REASON ? ' · arrived after the order timed out and was cancelled, refund or contact the customer'
+    : unexpected ? ` · arrived for a ${order.status.replaceAll('_', ' ')} order`
+      : lapsed ? ' · arrived after the 30-minute window, check stock'
+        : ' · auto-detected, approve to confirm';
   await notifyAdmins(db, {
     title: unexpected || lapsed ? 'UPI payment needs attention' : 'UPI payment received',
     body: `#${order.orderNumber} · ₹${order.total} · ${order.customer.name}${utr ? ` · UTR ${utr}` : ''}${note}`,
@@ -551,9 +552,44 @@ function businessDate(iso) {
   return new Date(new Date(iso).getTime() + 330 * 60 * 1000).toISOString().slice(0, 10);
 }
 
+const PAYMENT_WINDOW_MS = 30 * 60 * 1000;
+const PAYMENT_TIMEOUT_REASON = 'payment_timeout';
+
+function paymentWindowLapsed(order, now = Date.now()) {
+  return order.status === 'pending_payment' && now - new Date(order.createdAt).getTime() >= PAYMENT_WINDOW_MS;
+}
+
 function reservesStock(order) {
   if (['cancelled', 'refund_requested', 'refunded'].includes(order.status)) return false;
-  return order.status !== 'pending_payment' || Date.now() - new Date(order.createdAt).getTime() < 30 * 60 * 1000;
+  return !paymentWindowLapsed(order);
+}
+
+// Cancels unpaid orders once their 30-minute payment window has passed, giving
+// back any wallet credit they used. reservesStock already stops them holding
+// stock the moment the window closes; this makes the status say so too.
+async function cancelLapsedOrders(db, limit = Infinity) {
+  const lapsed = db.data.orders.filter((order) => paymentWindowLapsed(order)).slice(0, limit);
+  if (lapsed.length === 0) return [];
+  const nowIso = new Date().toISOString();
+  for (const order of lapsed) {
+    order.status = 'cancelled';
+    order.paymentStatus = paymentStatus(order);
+    order.cancelledAt = nowIso;
+    order.statusUpdatedAt = nowIso;
+    order.cancelReason = PAYMENT_TIMEOUT_REASON;
+    deactivateSubscriptions(db.data, order);
+    returnWalletCredit(db.data, order);
+  }
+  await db.write();
+  for (const order of lapsed) {
+    await notifyOrder(db, order, {
+      title: 'Order cancelled',
+      body: `Order #${order.orderNumber} was not paid within 30 minutes, so it has been cancelled.` +
+        (order.walletReturnedAt === nowIso ? ` ₹${order.walletApplied} is back in your wallet.` : ''),
+      data: { type: 'order_status', orderId: order.id, status: 'cancelled' }
+    });
+  }
+  return lapsed;
 }
 
 function subscriptionInService(subscription, data) {
@@ -2594,6 +2630,23 @@ app.use((error, req, res, next) => {
   res.status(error.status || 500).json({ error: error.status ? error.message : 'The request could not be completed. Please try again.' });
 });
 
+const LAPSED_ORDER_SWEEP_MS = 60 * 1000;
+async function sweepLapsedOrders() {
+  let count = 0;
+  try {
+    // One order per write, so without Mongo transactions a clash can never
+    // leave one order cancelled while another's wallet refund is lost.
+    while (count < 500 && (await cancelLapsedOrders(await getDb(), 1)).length > 0) count += 1;
+  } catch (err) {
+    // A clash with a request writing the same order is retried next sweep.
+    console.error('Lapsed order sweep failed:', err.message);
+  }
+  if (count > 0) console.log(`Cancelled ${count} unpaid order(s) after the payment window.`);
+}
+
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
+  // Render's free plan sleeps when idle, so sweep on boot as well as on a timer.
+  sweepLapsedOrders();
+  setInterval(sweepLapsedOrders, LAPSED_ORDER_SWEEP_MS).unref();
 });
