@@ -6,6 +6,7 @@ import { faqEntries, formatTime } from '../src/faq.js';
 import { deadlineMessage, deadlineRisk, daysUntilDeadline, etaText, RISK } from '../src/deadline.js';
 import { statusOf, skipAvailability, scheduleByDate, upcomingTotals, planSummary, formatMealDate, withinDays } from '../src/schedule.js';
 import { feedbackError, thanksFor } from '../src/feedback.js';
+import { formatCountdown, isPaymentUrgent, paymentWindowClosed, timeLeftToPay, PAYMENT_WINDOW_MS } from '../src/paymentWindow.js';
 
 const subWith = (overrides = {}) => ({
   carryForwardDeadline: '2026-11-20',
@@ -247,4 +248,33 @@ test('a complaint is answered differently from a compliment', () => {
   assert.match(thanksFor('complaint'), /look into it/);
   assert.match(thanksFor('praise'), /kitchen will love/);
   assert.match(thanksFor('suggestion'), /gets read/);
+});
+
+test('an unpaid order counts down 30 minutes from when it was placed', () => {
+  const placed = Date.parse('2026-10-21T10:00:00Z');
+  const order = { status: 'pending_payment', createdAt: '2026-10-21T10:00:00Z' };
+  assert.equal(timeLeftToPay(order, placed), PAYMENT_WINDOW_MS);
+  assert.equal(formatCountdown(timeLeftToPay(order, placed)), '30:00');
+  assert.equal(formatCountdown(timeLeftToPay(order, placed + 61_500)), '28:59');
+  assert.equal(paymentWindowClosed(order, placed + PAYMENT_WINDOW_MS - 1), false);
+  assert.equal(formatCountdown(timeLeftToPay(order, placed + PAYMENT_WINDOW_MS - 1)), '00:01');
+  assert.equal(paymentWindowClosed(order, placed + PAYMENT_WINDOW_MS), true);
+  assert.equal(timeLeftToPay(order, placed + PAYMENT_WINDOW_MS + 60_000), 0);
+});
+
+test('the countdown only applies while payment is still owed', () => {
+  const createdAt = '2026-10-21T10:00:00Z';
+  const later = Date.parse(createdAt) + 2 * PAYMENT_WINDOW_MS;
+  for (const status of ['payment_review', 'paid', 'cancelled']) {
+    assert.equal(timeLeftToPay({ status, createdAt }, later), null, status);
+    assert.equal(paymentWindowClosed({ status, createdAt }, later), false, status);
+  }
+  assert.equal(timeLeftToPay(null), null);
+  assert.equal(timeLeftToPay({ status: 'pending_payment', createdAt: 'nonsense' }), null);
+});
+
+test('the last five minutes are flagged as urgent', () => {
+  assert.equal(isPaymentUrgent(5 * 60 * 1000), false);
+  assert.equal(isPaymentUrgent(5 * 60 * 1000 - 1), true);
+  assert.equal(isPaymentUrgent(null), false);
 });

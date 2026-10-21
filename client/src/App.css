@@ -1465,6 +1465,63 @@ button.subscription-calendar-day:disabled {
   max-width: 320px;
 }
 
+.pay-countdown {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(102, 102, 102, 0.12);
+  color: #666;
+  font-size: 0.82rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.pay-countdown.urgent {
+  background: rgba(192, 57, 43, 0.12);
+  color: #c0392b;
+}
+
+.expired-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  max-width: 360px;
+  padding: 24px;
+  background: #fff;
+  border: 1px solid #eee;
+  border-radius: 16px;
+  color: #444;
+}
+
+.expired-card p {
+  margin: 0;
+}
+
+.btn-whatsapp {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  max-width: 320px;
+  box-sizing: border-box;
+  padding: 10px 14px;
+  border: 2px solid #e8552d;
+  border-radius: 10px;
+  color: #e8552d;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.btn-as-link {
+  box-sizing: border-box;
+  text-decoration: none;
+}
+
 .btn-upi-app.secondary {
   background: transparent;
   color: #e8552d;

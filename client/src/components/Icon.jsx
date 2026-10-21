@@ -68,6 +68,12 @@ const PATHS = {
     </>
   ),
   close: <path d="M6.5 6.5l11 11M17.5 6.5l-11 11" />,
+  timer: (
+    <>
+      <circle cx="12" cy="13" r="7.5" />
+      <path d="M12 9v4l2.5 2M9.5 3h5" />
+    </>
+  ),
   arrowLeft: <path d="M19 12H5.5M11 5.5 4.5 12l6.5 6.5" />,
   // The crest's crocus and wheat, redrawn as strokes. The crest itself is a
   // photoreal emboss that goes soft below about 80px.
