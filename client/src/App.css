@@ -1253,6 +1253,20 @@ button.subscription-calendar-day:disabled {
   font-size: 1rem;
 }
 
+.cart-bill {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 10px;
+  font-size: 0.9rem;
+  color: #555;
+}
+
+.cart-bill-row {
+  display: flex;
+  justify-content: space-between;
+}
+
 .cart-total-row {
   display: flex;
   justify-content: space-between;
@@ -1572,6 +1586,16 @@ button.subscription-calendar-day:disabled {
   border-radius: 16px;
   padding: 28px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+}
+
+.invoice-title {
+  margin: 0 0 12px;
+  text-align: center;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: #666;
 }
 
 .invoice-header {

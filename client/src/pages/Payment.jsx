@@ -7,6 +7,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import { getOrder, getStoreConfig, markOrderPaid, startOnlinePayment } from '../api';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
+import { formatRupees } from '../gst';
 import { formatCountdown, isPaymentUrgent, paymentWindowClosed, timeLeftToPay } from '../paymentWindow';
 
 const WHATSAPP_LINK = 'https://wa.me/919180381854';
@@ -98,7 +99,7 @@ export default function Payment() {
     <div className="payment-page">
       <BackToMenu />
       <h2>{expired ? 'Payment window closed' : order.status === 'pending_payment' ? 'Scan & Pay' : order.status === 'payment_review' ? 'Payment awaiting verification' : 'Order status'}</h2>
-      <p className="status-text">Order {orderLabel} · Amount ₹{order.total}</p>
+      <p className="status-text">Order {orderLabel} · Amount {formatRupees(order.total)}</p>
       {left > 0 && (
         <p className={`pay-countdown${isPaymentUrgent(left) ? ' urgent' : ''}`} role="timer">
           <Icon name="timer" size={16} />
@@ -106,7 +107,7 @@ export default function Payment() {
         </p>
       )}
       {order.walletApplied > 0 && (
-        <p className="status-text">₹{order.walletApplied} of ₹{order.subtotal} covered by your wallet.</p>
+        <p className="status-text">{formatRupees(order.walletApplied)} of {formatRupees(order.subtotal)} covered by your wallet.</p>
       )}
       {expired ? (
         <div className="expired-card">
@@ -129,12 +130,12 @@ export default function Payment() {
         <>
           {onlinePayment && (
             <button className="btn-primary pay-wide" type="button" disabled={redirecting} onClick={handlePayOnline}>
-              {redirecting ? 'Opening secure checkout...' : `Pay ₹${order.total} online (auto-verified)`}
+              {redirecting ? 'Opening secure checkout...' : `Pay ${formatRupees(order.total)} online (auto-verified)`}
             </button>
           )}
           {/* Opens GPay, PhonePe, Paytm etc. on phones; desktops fall back to the QR. */}
           <a className={`btn-upi-app${onlinePayment ? ' secondary' : ''}`} href={order.upiUri}>
-            Pay ₹{order.total} with a UPI app
+            Pay {formatRupees(order.total)} with a UPI app
           </a>
           <p className="pay-divider">or scan</p>
           <div className="qr-card">

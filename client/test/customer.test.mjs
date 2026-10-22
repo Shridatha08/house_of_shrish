@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { walletSplit, entryLabel, referralMessage } from '../src/wallet.js';
+import { gstBreakdown, formatRupees, GSTIN, RESTAURANT_HSN } from '../src/gst.js';
 import { faqEntries, formatTime } from '../src/faq.js';
 import { deadlineMessage, deadlineRisk, daysUntilDeadline, etaText, RISK } from '../src/deadline.js';
 import { statusOf, skipAvailability, scheduleByDate, upcomingTotals, planSummary, formatMealDate, withinDays } from '../src/schedule.js';
@@ -287,4 +288,23 @@ test('an order the server cancelled for non-payment reads as a closed window', (
   assert.equal(paymentWindowClosed(byCustomer), false);
   assert.equal(orderStatusText(byCustomer), 'cancelled');
   assert.equal(orderStatusText({ status: 'out_for_delivery' }), 'out for delivery');
+});
+
+test('GST is 2.5% CGST plus 2.5% SGST on top of the meal price, as the server charges', () => {
+  assert.deepEqual(gstBreakdown(129), { taxableValue: 129, cgst: 3.23, sgst: 3.23, total: 135.46 });
+  assert.deepEqual(gstBreakdown(299), { taxableValue: 299, cgst: 7.48, sgst: 7.48, total: 313.96 });
+  assert.deepEqual(gstBreakdown(0), { taxableValue: 0, cgst: 0, sgst: 0, total: 0 });
+  assert.equal(GSTIN, '29LXJPS8316L1ZC');
+  assert.equal(RESTAURANT_HSN, '9963');
+});
+
+test('wallet credit off a GST total has no float noise', () => {
+  assert.deepEqual(walletSplit({ total: 313.96, balance: 50, useWallet: true }), { credit: 50, payable: 263.96 });
+  assert.deepEqual(walletSplit({ total: 135.46, balance: 100.1, useWallet: true }), { credit: 100.1, payable: 35.36 });
+});
+
+test('rupee amounts show paise only when there are any', () => {
+  assert.equal(formatRupees(299), '₹299');
+  assert.equal(formatRupees(313.9), '₹313.90');
+  assert.equal(formatRupees(135.46), '₹135.46');
 });

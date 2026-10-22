@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { CartProvider } from './context/CartContext'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { getMySubscriptions } from './api'
+import { GSTIN } from './gst'
 import Menu from './pages/Menu'
 import Checkout from './pages/Checkout'
 import Payment from './pages/Payment'
@@ -100,6 +101,7 @@ function App() {
         <footer className="app-footer">
           <Link to="/privacy">Privacy Policy</Link>
           <span>FSSAI 21226187002762</span>
+          <span>GSTIN {GSTIN}</span>
         </footer>
       </CartProvider>
     </AuthProvider>

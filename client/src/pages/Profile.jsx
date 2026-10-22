@@ -11,6 +11,7 @@ import MealPlanPanel from '../components/MealPlanPanel';
 import FeedbackPanel from '../components/FeedbackPanel';
 import { formatMealDate, mealLabel, mealKey, planSummary } from '../schedule';
 import { orderStatusText } from '../paymentWindow';
+import { formatRupees } from '../gst';
 import { updateProfile, getMySubscriptions, getMyOrders, cancelOrder, requestRefund, skipSubscriptionMeal, deleteAccount, getWallet, getStoreConfig } from '../api';
 
 export default function Profile() {
@@ -256,7 +257,7 @@ export default function Profile() {
                 <span className={`subscription-badge ${order.status === 'delivered' ? 'active' : order.status === 'cancelled' || order.status === 'refunded' ? 'expired' : order.status === 'refund_requested' ? 'pending' : 'expiring'}`}>{order.status.replaceAll('_', ' ')}</span>
               </div>
               <p className="subscription-summary-dates">
-                {order.scheduledDate ? `${order.scheduledDate} · ${order.timeSlot} · ` : 'No scheduled delivery · '}₹{order.total}
+                {order.scheduledDate ? `${order.scheduledDate} · ${order.timeSlot} · ` : 'No scheduled delivery · '}{formatRupees(order.total)}
               </p>
               <p className="subscription-summary-dates">Payment / delivery status: {orderStatusText(order)}</p>
               <p className="subscription-summary-dates">{order.items.map((item) => `${item.name} × ${item.quantity}`).join(', ')}</p>

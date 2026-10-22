@@ -13,7 +13,7 @@ import { MongoClient } from 'mongodb';
 
 const COLLECTIONS = [
   'menu', 'orders', 'users', 'sessions', 'passwordResetRequests', 'subscriptions',
-  'holidays', 'drivers', 'driverSessions', 'deviceTokens', 'walletEntries', 'settings', 'meta', 'appData'
+  'holidays', 'drivers', 'driverSessions', 'deviceTokens', 'walletEntries', 'invoiceCounters', 'settings', 'meta', 'appData'
 ];
 
 const uri = process.env.MONGODB_URI;

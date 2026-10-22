@@ -30,7 +30,7 @@ function fixture() {
 const RECORD_KEYS = {
   menu: 'id', orders: 'id', users: 'id', sessions: 'token', passwordResetRequests: 'id',
   subscriptions: 'id', holidays: 'id', drivers: 'id', driverSessions: 'token', deviceTokens: 'token', walletEntries: 'id',
-  feedback: 'id'
+  feedback: 'id', invoiceCounters: 'id'
 };
 
 // Applies only the records a snapshot actually changed, the way per-record
@@ -185,15 +185,92 @@ test('customer payment submission requires admin verification before invoice and
   assert.equal((await app.request('patch', '/api/admin/orders/:id/status', { status: 'paid' }, { id }, adminHeaders)).code, 409);
 });
 
+test('orders charge 2.5% CGST and 2.5% SGST on top of the menu price', async () => {
+  const app = application();
+  const created = await purchase(app, 6);
+  const order = created.body.order;
+  assert.equal(order.taxableValue, 299);
+  assert.equal(order.cgstRate, 2.5);
+  assert.equal(order.cgst, 7.48);
+  assert.equal(order.sgstRate, 2.5);
+  assert.equal(order.sgst, 7.48);
+  assert.equal(order.total, 313.96);
+  assert.equal(order.invoiceNumber, undefined, 'numbered only once paid');
+});
+
+async function verify(app, id) {
+  await app.request('patch', '/api/orders/:id/mark-paid', {}, { id });
+  return app.request('patch', '/api/admin/orders/:id/status', { status: 'paid' }, { id }, adminHeaders);
+}
+
+test('verified orders get a GST tax invoice numbered consecutively per IST day', async () => {
+  const app = application();
+  const first = (await purchase(app, 6)).body.order.id;
+  const cancelled = (await purchase(app, 6)).body.order.id;
+  const second = (await purchase(app, 6)).body.order.id;
+  await app.request('patch', '/api/orders/:id/cancel', {}, { id: cancelled });
+  assert.equal((await verify(app, second)).code, 200);
+  assert.equal((await verify(app, first)).code, 200);
+
+  const invoice = await app.request('get', '/api/orders/:id/invoice', {}, { id: second });
+  assert.equal(invoice.code, 200);
+  assert.equal(invoice.body.taxInvoice, true);
+  assert.equal(invoice.body.invoiceNumber, '10102026_01', 'by verification order, not order placement');
+  assert.equal(invoice.body.date, now.replace('Z', '.000Z'));
+  assert.equal(invoice.body.business.gstin, '29LXJPS8316L1ZC');
+  assert.equal(invoice.body.hsn, '9963');
+  assert.equal(invoice.body.taxableValue, 299);
+  assert.equal(invoice.body.cgst, 7.48);
+  assert.equal(invoice.body.sgst, 7.48);
+  assert.equal(invoice.body.total, 313.96);
+  assert.equal(invoice.body.amountPaid, 313.96);
+  assert.equal((await app.request('get', '/api/orders/:id/invoice', {}, { id: first })).body.invoiceNumber, '10102026_02');
+
+  // 00:30 IST on the 11th: a new day restarts the sequence.
+  app.clock('2026-10-10T19:00:00Z');
+  const next = (await purchase(app, 6)).body.order.id;
+  await verify(app, next);
+  assert.equal((await app.request('get', '/api/orders/:id/invoice', {}, { id: next })).body.invoiceNumber, '11102026_01');
+  // Fetching again never renumbers.
+  assert.equal((await app.request('get', '/api/orders/:id/invoice', {}, { id: second })).body.invoiceNumber, '10102026_01');
+});
+
+test('a wallet-settled order is invoiced for its full value', async () => {
+  const app = application();
+  app.state().users[0].walletBalance = 500;
+  const created = await purchase(app, 6, { useWallet: true });
+  const invoice = await app.request('get', '/api/orders/:id/invoice', {}, { id: created.body.order.id });
+  assert.equal(invoice.body.invoiceNumber, '10102026_01');
+  assert.equal(invoice.body.total, 313.96);
+  assert.equal(invoice.body.walletApplied, 313.96);
+  assert.equal(invoice.body.amountPaid, 0);
+});
+
+test('orders billed before GST keep their plain invoice', async () => {
+  const data = fixture();
+  data.orders.push({
+    id: 77, orderNumber: '01102026-01', items: [{ id: 1, name: 'Single Meal', price: 129, quantity: 1, customisation: 'Meal A' }],
+    subtotal: 129, walletApplied: 0, total: 129, userId: 1, customer, status: 'delivered', paymentStatus: 'verified', createdAt: '2026-10-01T04:00:00.000Z'
+  });
+  const app = application(data);
+  const invoice = await app.request('get', '/api/orders/:id/invoice', {}, { id: 77 });
+  assert.equal(invoice.code, 200);
+  assert.equal(invoice.body.taxInvoice, false);
+  assert.equal(invoice.body.invoiceNumber, 'INV-01102026-01');
+  assert.equal(invoice.body.cgst, undefined);
+  assert.equal(invoice.body.total, 129);
+  assert.equal(app.state().invoiceCounters, undefined, 'consumes no tax invoice number');
+});
+
 test('guest order recovery requires its access token and returns the payment URI', async () => {
   const app = application();
   const created = await app.request('post', '/api/orders', { items: [{ id: 6, quantity: 1, customisation: '500g', price: 1 }], customer }, {}, {});
   const id = created.body.order.id;
-  assert.equal(created.body.order.total, 699);
+  assert.equal(created.body.order.total, 733.96);
   assert.equal((await app.request('get', '/api/orders/:id', {}, { id }, {})).code, 403);
   const loaded = await app.request('get', '/api/orders/:id', {}, { id }, { 'x-order-token': created.body.accessToken });
   assert.equal(loaded.code, 200);
-  assert.ok(loaded.body.upiUri.includes('am=699'));
+  assert.ok(loaded.body.upiUri.includes('am=733.96'));
   assert.equal(loaded.body.accessToken, undefined);
 });
 
@@ -1596,7 +1673,8 @@ test('a new price is what the customer is charged', async () => {
   const order = await purchase(app);
   assert.equal(order.code, 201);
   assert.equal(order.body.order.items[0].price, 149);
-  assert.equal(order.body.order.total, 149);
+  assert.equal(order.body.order.taxableValue, 149);
+  assert.equal(order.body.order.total, 156.46);
 });
 
 test('variant prices are edited by size, and charged by size', async () => {
@@ -1754,10 +1832,10 @@ test('wallet credit comes off the amount the customer is asked to pay', async ()
   const order = await app.request('post', '/api/orders', {
     items: [{ id: 6, quantity: 1, customisation: '200g' }], customer, useWallet: true
   });
-  assert.equal(order.body.order.subtotal, 299);
+  assert.equal(order.body.order.subtotal, 313.96);
   assert.equal(order.body.order.walletApplied, 50);
-  assert.equal(order.body.order.total, 249);
-  assert.match(order.body.upiUri, /am=249/);
+  assert.equal(order.body.order.total, 263.96);
+  assert.match(order.body.upiUri, /am=263.96/);
   assert.equal(app.state().users[0].walletBalance, 0, 'the credit is spent');
 });
 
@@ -1768,9 +1846,9 @@ test('a wallet is never overdrawn', async () => {
   const order = await app.request('post', '/api/orders', {
     items: [{ id: 1, quantity: 1, customisation: 'Meal A' }], customer, useWallet: true
   });
-  assert.equal(order.body.order.walletApplied, 129, 'only what the order costs');
+  assert.equal(order.body.order.walletApplied, 135.46, 'only what the order costs');
   assert.equal(order.body.order.total, 0);
-  assert.equal(app.state().users[0].walletBalance, 371);
+  assert.equal(app.state().users[0].walletBalance, 364.54);
   // Nothing is owed, so there is no payment to verify.
   assert.equal(app.state().orders[0].status, 'paid');
   assert.equal(app.state().orders[0].paymentStatus, 'verified');
@@ -1783,7 +1861,7 @@ test('credit is not spent unless the customer asks', async () => {
   const order = await app.request('post', '/api/orders', {
     items: [{ id: 6, quantity: 1, customisation: '200g' }], customer
   });
-  assert.equal(order.body.order.total, 299);
+  assert.equal(order.body.order.total, 313.96);
   assert.equal(order.body.order.walletApplied, 0);
   assert.equal(app.state().users[0].walletBalance, 50);
 });
@@ -2225,7 +2303,7 @@ async function youpiOrder(gateway = youpiGateway()) {
 }
 
 function successPayload(id, overrides = {}) {
-  return { event: 'SUCCESS', paymentId: 'pay-1', orderId: `HOS-${id}`, amount: '129.00', amountPaise: 12900, method: 'UPI', utr: '123456789012', verificationLevel: 1, ...overrides };
+  return { event: 'SUCCESS', paymentId: 'pay-1', orderId: `HOS-${id}`, amount: '135.46', amountPaise: 13546, method: 'UPI', utr: '123456789012', verificationLevel: 1, ...overrides };
 }
 
 test('online payment stays off until the gateway is configured', async () => {
@@ -2248,7 +2326,7 @@ test('starting online payment opens a gateway session for the exact order total'
   assert.equal(call.init.headers['X-Merchant-Key'], 'whsec-test');
   assert.equal(call.init.headers['X-Merchant-Id'], 'merchant-1');
   assert.equal(call.body.orderId, `HOS-${id}`);
-  assert.equal(call.body.amount, '129.00');
+  assert.equal(call.body.amount, '135.46');
   assert.equal(call.body.customer.phoneNumber, customer.phone);
   assert.match(call.body.returnUrl, new RegExp(`/payment/${id}$`));
   assert.deepEqual(app.state().orders[0].youpi.paymentIds, ['pay-1']);

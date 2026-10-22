@@ -5,6 +5,7 @@ import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 import { placeOrder, getWallet } from '../api';
 import { walletSplit } from '../wallet';
+import { CGST_RATE, SGST_RATE, formatRupees, gstBreakdown } from '../gst';
 import LocationPicker from '../components/LocationPicker';
 
 function todayIST() {
@@ -42,7 +43,8 @@ export default function Checkout() {
     return () => { cancelled = true; };
   }, [token]);
 
-  const split = walletSplit({ total, balance: walletBalance, useWallet });
+  const tax = gstBreakdown(total);
+  const split = walletSplit({ total: tax.total, balance: walletBalance, useWallet });
 
   const requiresAccount = items.some((i) => i.name.toLowerCase().startsWith('monthly'));
   const blockedByAuth = requiresAccount && !user;
@@ -147,9 +149,23 @@ export default function Checkout() {
               <button type="button" className="btn-remove" onClick={() => removeItem(item.key)}>✕</button>
             </div>
           ))}
+          <div className="cart-bill">
+            <div className="cart-bill-row">
+              <span>Meal price (before tax)</span>
+              <span>{formatRupees(tax.taxableValue)}</span>
+            </div>
+            <div className="cart-bill-row">
+              <span>CGST @ {CGST_RATE}%</span>
+              <span>{formatRupees(tax.cgst)}</span>
+            </div>
+            <div className="cart-bill-row">
+              <span>SGST @ {SGST_RATE}%</span>
+              <span>{formatRupees(tax.sgst)}</span>
+            </div>
+          </div>
           <div className="cart-total-row">
             <strong>Total</strong>
-            <strong>₹{total}</strong>
+            <strong>{formatRupees(tax.total)}</strong>
           </div>
           {walletBalance > 0 && (
             <div className="wallet-apply">
@@ -159,12 +175,12 @@ export default function Checkout() {
                   checked={useWallet}
                   onChange={(event) => setUseWallet(event.target.checked)}
                 />
-                {' '}Use ₹{split.credit} wallet credit
+                {' '}Use {formatRupees(split.credit)} wallet credit
               </label>
               {useWallet && (
                 <div className="cart-total-row">
                   <strong>To pay</strong>
-                  <strong>₹{split.payable}</strong>
+                  <strong>{formatRupees(split.payable)}</strong>
                 </div>
               )}
             </div>
@@ -233,7 +249,7 @@ export default function Checkout() {
         {error && <p className="status-text error">{error}</p>}
 
         <button className="btn-primary" type="submit" disabled={submitting || items.length === 0 || blockedByAuth}>
-          {submitting ? 'Placing order…' : `Place order · ₹${split.payable}`}
+          {submitting ? 'Placing order…' : `Place order · ${formatRupees(split.payable)}`}
         </button>
       </form>
     </div>

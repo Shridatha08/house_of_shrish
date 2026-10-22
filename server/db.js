@@ -63,6 +63,9 @@ const SCHEMA_VERSION = 1;
 // Device tokens are digested because an FCM token can exceed MongoDB's index
 // key limit.
 const COLLECTION_KEYS = {
+  // First, so a clash over the next invoice number aborts before an order is
+  // written even where multi-document transactions are unavailable.
+  invoiceCounters: (entry) => entry.id,
   menu: (entry) => entry.id,
   orders: (entry) => entry.id,
   users: (entry) => entry.id,

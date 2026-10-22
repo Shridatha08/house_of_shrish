@@ -4,7 +4,8 @@ export function walletSplit({ total, balance, useWallet }) {
   const available = balance <= 0 ? 0 : Math.min(balance, total);
   return {
     credit: available,
-    payable: useWallet ? total - available : total
+    // In paise, so a GST total like 313.96 minus credit never shows float noise.
+    payable: useWallet ? (Math.round(total * 100) - Math.round(available * 100)) / 100 : total
   };
 }
 

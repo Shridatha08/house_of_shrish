@@ -32,11 +32,58 @@ const OUT_OF_RANGE_MESSAGE = 'Sorry Unavailable in your area. We are working to 
 const ADMIN_KEY = process.env.ADMIN_KEY;
 if (!ADMIN_KEY) throw new Error('ADMIN_KEY environment variable is required.');
 
-// Demo business details shown on invoices.
+const GSTIN = '29LXJPS8316L1ZC';
+// SAC 9963: accommodation, food and beverage services (restaurant service).
+const RESTAURANT_HSN = '9963';
+const CGST_RATE = 2.5;
+const SGST_RATE = 2.5;
+
+// Business details shown on invoices.
 const BUSINESS = {
   name: 'House of Shrish',
-  address: 'Bengaluru, Karnataka, India'
+  address: 'Bengaluru, Karnataka, India',
+  gstin: GSTIN
 };
+
+// Menu prices are exclusive of GST. Worked in whole paise so every client that
+// repeats this arithmetic lands on the same figures.
+function gstBreakdown(taxableValue) {
+  const basePaise = Math.round(Number(taxableValue) * 100);
+  const cgstPaise = Math.round((basePaise * CGST_RATE) / 100);
+  const sgstPaise = Math.round((basePaise * SGST_RATE) / 100);
+  return {
+    taxableValue: basePaise / 100,
+    cgst: cgstPaise / 100,
+    sgst: sgstPaise / 100,
+    total: (basePaise + cgstPaise + sgstPaise) / 100
+  };
+}
+
+function istDateParts(date) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).formatToParts(date);
+  const part = (type) => parts.find((value) => value.type === type).value;
+  return { dd: part('day'), mm: part('month'), yyyy: part('year') };
+}
+
+// Tax invoices are numbered DDMMYYYY_NN by IST issue date, consecutively and
+// only once payment is verified, so unpaid or cancelled orders leave no gaps.
+// Orders billed before GST was charged keep their original plain invoice.
+function issueInvoice(data, order, at = new Date()) {
+  if (order.invoiceNumber || order.taxableValue === undefined) return;
+  const { dd, mm, yyyy } = istDateParts(at);
+  const day = `${dd}${mm}${yyyy}`;
+  data.invoiceCounters ||= [];
+  let counter = data.invoiceCounters.find((entry) => entry.id === day);
+  if (!counter) {
+    counter = { id: day, last: 0 };
+    data.invoiceCounters.push(counter);
+  }
+  counter.last += 1;
+  order.invoiceNumber = `${day}_${pad(counter.last)}`;
+  order.invoiceDate = at.toISOString();
+}
 
 function pad(n, len = 2) {
   return String(n).padStart(len, '0');
@@ -2105,6 +2152,7 @@ app.patch('/api/admin/orders/:id/status', async (req, res) => {
   if (status === 'paid') {
     order.paymentStatus = 'verified';
     order.paymentVerifiedAt = new Date().toISOString();
+    issueInvoice(db.data, order);
   }
   // Settled on any verified-payment stage, not just the moment of verification,
   // so an order verified before referrals existed still pays out. The reward is
@@ -2264,7 +2312,10 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
   const todayKey = now.toISOString().slice(0, 10);
   const ordersToday = db.data.orders.filter((o) => o.createdAt.slice(0, 10) === todayKey).length;
 
-  const subtotal = total;
+  const tax = gstBreakdown(total);
+  // The bill including GST, before any wallet credit is applied.
+  const subtotal = tax.total;
+  total = subtotal;
   let walletApplied = 0;
   if (useWallet && user) {
     walletApplied = Math.min(Number(user.walletBalance || 0), subtotal);
@@ -2275,6 +2326,11 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
     id: orderId,
     orderNumber: buildOrderNumber(now, ordersToday + 1),
     items: orderItems,
+    taxableValue: tax.taxableValue,
+    cgstRate: CGST_RATE,
+    cgst: tax.cgst,
+    sgstRate: SGST_RATE,
+    sgst: tax.sgst,
     subtotal,
     walletApplied,
     total,
@@ -2307,6 +2363,7 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
       order.paymentStatus = 'verified';
       order.paymentVerifiedAt = new Date().toISOString();
       order.settledFromWallet = true;
+      issueInvoice(db.data, order);
     }
   }
 
@@ -2609,19 +2666,48 @@ app.get('/api/orders/:id/invoice', async (req, res) => {
   if (!canAccessOrder(order, user, req)) return res.status(403).json({ error: 'You cannot access this invoice.' });
   if (paymentStatus(order) !== 'verified') return res.status(409).json({ error: 'Invoice is available after admin payment verification.' });
 
-  const items = order.items.map((item) => ({ ...item, lineTotal: item.price * item.quantity }));
+  const taxInvoice = order.taxableValue !== undefined;
+  if (taxInvoice && !order.invoiceNumber) {
+    // Verified before numbering existed on this path; number it on first request.
+    issueInvoice(db.data, order);
+    await db.write();
+  }
 
-  res.json({
-    invoiceNumber: `INV-${order.orderNumber || order.id}`,
+  const items = order.items.map((item) => ({ ...item, lineTotal: item.price * item.quantity }));
+  const invoiceTotal = Number(order.subtotal ?? order.total);
+  const common = {
     orderNumber: order.orderNumber || String(order.id),
-    date: order.createdAt,
     status: order.status,
     scheduledDate: order.scheduledDate,
     timeSlot: order.timeSlot,
     business: BUSINESS,
     customer: order.customer,
     items,
-    total: order.total
+    walletApplied: Number(order.walletApplied || 0),
+    amountPaid: Number(order.total),
+    total: invoiceTotal
+  };
+
+  if (!taxInvoice) {
+    return res.json({
+      ...common,
+      taxInvoice: false,
+      invoiceNumber: `INV-${order.orderNumber || order.id}`,
+      date: order.createdAt
+    });
+  }
+
+  res.json({
+    ...common,
+    taxInvoice: true,
+    invoiceNumber: order.invoiceNumber,
+    date: order.invoiceDate,
+    hsn: RESTAURANT_HSN,
+    taxableValue: order.taxableValue,
+    cgstRate: order.cgstRate,
+    cgst: order.cgst,
+    sgstRate: order.sgstRate,
+    sgst: order.sgst
   });
 });
 
