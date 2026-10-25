@@ -81,7 +81,9 @@ async function send(db, tokens, { title, body, data = {} }) {
       tokens,
       notification: { title, body },
       data: payload,
-      android: { priority: 'high', notification: { channelId: payload.channel || 'general' } }
+      android: { priority: 'high', notification: { channelId: payload.channel || 'general' } },
+      // iOS delivers alerts silently unless a sound is named.
+      apns: { payload: { aps: { sound: 'default' } } }
     });
 
     const dead = new Set();
