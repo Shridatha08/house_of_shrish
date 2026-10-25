@@ -194,7 +194,8 @@ test('orders charge 2.5% CGST and 2.5% SGST on top of the menu price', async () 
   assert.equal(order.cgst, 7.48);
   assert.equal(order.sgstRate, 2.5);
   assert.equal(order.sgst, 7.48);
-  assert.equal(order.total, 313.96);
+  assert.equal(order.roundOff, 0.04, 'rounded up to the next rupee');
+  assert.equal(order.total, 314);
   assert.equal(order.invoiceNumber, undefined, 'numbered only once paid');
 });
 
@@ -222,8 +223,9 @@ test('verified orders get a GST tax invoice numbered consecutively per IST day',
   assert.equal(invoice.body.taxableValue, 299);
   assert.equal(invoice.body.cgst, 7.48);
   assert.equal(invoice.body.sgst, 7.48);
-  assert.equal(invoice.body.total, 313.96);
-  assert.equal(invoice.body.amountPaid, 313.96);
+  assert.equal(invoice.body.roundOff, 0.04);
+  assert.equal(invoice.body.total, 314);
+  assert.equal(invoice.body.amountPaid, 314);
   assert.equal((await app.request('get', '/api/orders/:id/invoice', {}, { id: first })).body.invoiceNumber, '10102026_02');
 
   // 00:30 IST on the 11th: a new day restarts the sequence.
@@ -241,8 +243,8 @@ test('a wallet-settled order is invoiced for its full value', async () => {
   const created = await purchase(app, 6, { useWallet: true });
   const invoice = await app.request('get', '/api/orders/:id/invoice', {}, { id: created.body.order.id });
   assert.equal(invoice.body.invoiceNumber, '10102026_01');
-  assert.equal(invoice.body.total, 313.96);
-  assert.equal(invoice.body.walletApplied, 313.96);
+  assert.equal(invoice.body.total, 314);
+  assert.equal(invoice.body.walletApplied, 314);
   assert.equal(invoice.body.amountPaid, 0);
 });
 
@@ -266,11 +268,11 @@ test('guest order recovery requires its access token and returns the payment URI
   const app = application();
   const created = await app.request('post', '/api/orders', { items: [{ id: 6, quantity: 1, customisation: '500g', price: 1 }], customer }, {}, {});
   const id = created.body.order.id;
-  assert.equal(created.body.order.total, 733.96);
+  assert.equal(created.body.order.total, 734);
   assert.equal((await app.request('get', '/api/orders/:id', {}, { id }, {})).code, 403);
   const loaded = await app.request('get', '/api/orders/:id', {}, { id }, { 'x-order-token': created.body.accessToken });
   assert.equal(loaded.code, 200);
-  assert.ok(loaded.body.upiUri.includes('am=733.96'));
+  assert.ok(loaded.body.upiUri.includes('am=734'));
   assert.equal(loaded.body.accessToken, undefined);
 });
 
@@ -1674,7 +1676,7 @@ test('a new price is what the customer is charged', async () => {
   assert.equal(order.code, 201);
   assert.equal(order.body.order.items[0].price, 149);
   assert.equal(order.body.order.taxableValue, 149);
-  assert.equal(order.body.order.total, 156.46);
+  assert.equal(order.body.order.total, 157);
 });
 
 test('variant prices are edited by size, and charged by size', async () => {
@@ -1832,10 +1834,10 @@ test('wallet credit comes off the amount the customer is asked to pay', async ()
   const order = await app.request('post', '/api/orders', {
     items: [{ id: 6, quantity: 1, customisation: '200g' }], customer, useWallet: true
   });
-  assert.equal(order.body.order.subtotal, 313.96);
+  assert.equal(order.body.order.subtotal, 314);
   assert.equal(order.body.order.walletApplied, 50);
-  assert.equal(order.body.order.total, 263.96);
-  assert.match(order.body.upiUri, /am=263.96/);
+  assert.equal(order.body.order.total, 264);
+  assert.match(order.body.upiUri, /am=264/);
   assert.equal(app.state().users[0].walletBalance, 0, 'the credit is spent');
 });
 
@@ -1846,9 +1848,9 @@ test('a wallet is never overdrawn', async () => {
   const order = await app.request('post', '/api/orders', {
     items: [{ id: 1, quantity: 1, customisation: 'Meal A' }], customer, useWallet: true
   });
-  assert.equal(order.body.order.walletApplied, 135.46, 'only what the order costs');
+  assert.equal(order.body.order.walletApplied, 136, 'only what the order costs');
   assert.equal(order.body.order.total, 0);
-  assert.equal(app.state().users[0].walletBalance, 364.54);
+  assert.equal(app.state().users[0].walletBalance, 364);
   // Nothing is owed, so there is no payment to verify.
   assert.equal(app.state().orders[0].status, 'paid');
   assert.equal(app.state().orders[0].paymentStatus, 'verified');
@@ -1861,7 +1863,7 @@ test('credit is not spent unless the customer asks', async () => {
   const order = await app.request('post', '/api/orders', {
     items: [{ id: 6, quantity: 1, customisation: '200g' }], customer
   });
-  assert.equal(order.body.order.total, 313.96);
+  assert.equal(order.body.order.total, 314);
   assert.equal(order.body.order.walletApplied, 0);
   assert.equal(app.state().users[0].walletBalance, 50);
 });
@@ -2303,7 +2305,7 @@ async function youpiOrder(gateway = youpiGateway()) {
 }
 
 function successPayload(id, overrides = {}) {
-  return { event: 'SUCCESS', paymentId: 'pay-1', orderId: `HOS-${id}`, amount: '135.46', amountPaise: 13546, method: 'UPI', utr: '123456789012', verificationLevel: 1, ...overrides };
+  return { event: 'SUCCESS', paymentId: 'pay-1', orderId: `HOS-${id}`, amount: '136.00', amountPaise: 13600, method: 'UPI', utr: '123456789012', verificationLevel: 1, ...overrides };
 }
 
 test('online payment stays off until the gateway is configured', async () => {
@@ -2326,7 +2328,7 @@ test('starting online payment opens a gateway session for the exact order total'
   assert.equal(call.init.headers['X-Merchant-Key'], 'whsec-test');
   assert.equal(call.init.headers['X-Merchant-Id'], 'merchant-1');
   assert.equal(call.body.orderId, `HOS-${id}`);
-  assert.equal(call.body.amount, '135.46');
+  assert.equal(call.body.amount, '136.00');
   assert.equal(call.body.customer.phoneNumber, customer.phone);
   assert.match(call.body.returnUrl, new RegExp(`/payment/${id}$`));
   assert.deepEqual(app.state().orders[0].youpi.paymentIds, ['pay-1']);

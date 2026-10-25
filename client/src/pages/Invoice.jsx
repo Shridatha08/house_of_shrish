@@ -102,6 +102,12 @@ export default function Invoice() {
                 <span>SGST @ {invoice.sgstRate}%</span>
                 <span>₹{money(invoice.sgst)}</span>
               </div>
+              {invoice.roundOff > 0 && (
+                <div className="invoice-totals-row">
+                  <span>Round off</span>
+                  <span>+₹{money(invoice.roundOff)}</span>
+                </div>
+              )}
             </>
           )}
           <div className="invoice-totals-row invoice-grand-total">

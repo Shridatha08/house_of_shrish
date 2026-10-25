@@ -9,11 +9,15 @@ export function gstBreakdown(taxableValue) {
   const basePaise = Math.round(Number(taxableValue) * 100);
   const cgstPaise = Math.round((basePaise * CGST_RATE) / 100);
   const sgstPaise = Math.round((basePaise * SGST_RATE) / 100);
+  const grossPaise = basePaise + cgstPaise + sgstPaise;
+  // Rounded up to the next whole rupee, as the server charges.
+  const totalPaise = Math.ceil(grossPaise / 100) * 100;
   return {
     taxableValue: basePaise / 100,
     cgst: cgstPaise / 100,
     sgst: sgstPaise / 100,
-    total: (basePaise + cgstPaise + sgstPaise) / 100
+    roundOff: (totalPaise - grossPaise) / 100,
+    total: totalPaise / 100
   };
 }
 

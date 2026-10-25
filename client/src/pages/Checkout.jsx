@@ -162,6 +162,12 @@ export default function Checkout() {
               <span>SGST @ {SGST_RATE}%</span>
               <span>{formatRupees(tax.sgst)}</span>
             </div>
+            {tax.roundOff > 0 && (
+              <div className="cart-bill-row">
+                <span>Round off</span>
+                <span>+{formatRupees(tax.roundOff)}</span>
+              </div>
+            )}
           </div>
           <div className="cart-total-row">
             <strong>Total</strong>

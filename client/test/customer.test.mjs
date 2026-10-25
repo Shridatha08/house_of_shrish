@@ -291,9 +291,11 @@ test('an order the server cancelled for non-payment reads as a closed window', (
 });
 
 test('GST is 2.5% CGST plus 2.5% SGST on top of the meal price, as the server charges', () => {
-  assert.deepEqual(gstBreakdown(129), { taxableValue: 129, cgst: 3.23, sgst: 3.23, total: 135.46 });
-  assert.deepEqual(gstBreakdown(299), { taxableValue: 299, cgst: 7.48, sgst: 7.48, total: 313.96 });
-  assert.deepEqual(gstBreakdown(0), { taxableValue: 0, cgst: 0, sgst: 0, total: 0 });
+  assert.deepEqual(gstBreakdown(129), { taxableValue: 129, cgst: 3.23, sgst: 3.23, roundOff: 0.54, total: 136 });
+  assert.deepEqual(gstBreakdown(299), { taxableValue: 299, cgst: 7.48, sgst: 7.48, roundOff: 0.04, total: 314 });
+  assert.deepEqual(gstBreakdown(0), { taxableValue: 0, cgst: 0, sgst: 0, roundOff: 0, total: 0 });
+  // Already a whole rupee: nothing is added.
+  assert.deepEqual(gstBreakdown(100), { taxableValue: 100, cgst: 2.5, sgst: 2.5, roundOff: 0, total: 105 });
   assert.equal(GSTIN, '29LXJPS8316L1ZC');
   assert.equal(RESTAURANT_HSN, '9963');
 });

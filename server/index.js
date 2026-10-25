@@ -46,16 +46,20 @@ const BUSINESS = {
 };
 
 // Menu prices are exclusive of GST. Worked in whole paise so every client that
-// repeats this arithmetic lands on the same figures.
+// repeats this arithmetic lands on the same figures. The bill is rounded up to
+// the next whole rupee and the difference shown as a round-off line.
 function gstBreakdown(taxableValue) {
   const basePaise = Math.round(Number(taxableValue) * 100);
   const cgstPaise = Math.round((basePaise * CGST_RATE) / 100);
   const sgstPaise = Math.round((basePaise * SGST_RATE) / 100);
+  const grossPaise = basePaise + cgstPaise + sgstPaise;
+  const totalPaise = Math.ceil(grossPaise / 100) * 100;
   return {
     taxableValue: basePaise / 100,
     cgst: cgstPaise / 100,
     sgst: sgstPaise / 100,
-    total: (basePaise + cgstPaise + sgstPaise) / 100
+    roundOff: (totalPaise - grossPaise) / 100,
+    total: totalPaise / 100
   };
 }
 
@@ -2331,6 +2335,7 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
     cgst: tax.cgst,
     sgstRate: SGST_RATE,
     sgst: tax.sgst,
+    roundOff: tax.roundOff,
     subtotal,
     walletApplied,
     total,
@@ -2707,7 +2712,8 @@ app.get('/api/orders/:id/invoice', async (req, res) => {
     cgstRate: order.cgstRate,
     cgst: order.cgst,
     sgstRate: order.sgstRate,
-    sgst: order.sgst
+    sgst: order.sgst,
+    roundOff: Number(order.roundOff || 0)
   });
 });
 
