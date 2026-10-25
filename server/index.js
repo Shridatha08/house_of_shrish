@@ -42,7 +42,9 @@ const SGST_RATE = 2.5;
 const BUSINESS = {
   name: 'House of Shrish',
   address: 'Bengaluru, Karnataka, India',
-  gstin: GSTIN
+  gstin: GSTIN,
+  state: 'Karnataka',
+  stateCode: '29'
 };
 
 // Menu prices are exclusive of GST. Worked in whole paise so every client that
@@ -2708,6 +2710,8 @@ app.get('/api/orders/:id/invoice', async (req, res) => {
     invoiceNumber: order.invoiceNumber,
     date: order.invoiceDate,
     hsn: RESTAURANT_HSN,
+    // Deliveries are local to the Bengaluru kitchen, so supply is always intra-state.
+    placeOfSupply: `${BUSINESS.state} (${BUSINESS.stateCode})`,
     taxableValue: order.taxableValue,
     cgstRate: order.cgstRate,
     cgst: order.cgst,

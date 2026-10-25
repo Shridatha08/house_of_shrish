@@ -220,6 +220,8 @@ test('verified orders get a GST tax invoice numbered consecutively per IST day',
   assert.equal(invoice.body.date, now.replace('Z', '.000Z'));
   assert.equal(invoice.body.business.gstin, '29LXJPS8316L1ZC');
   assert.equal(invoice.body.hsn, '9963');
+  assert.equal(invoice.body.placeOfSupply, 'Karnataka (29)');
+  assert.equal(invoice.body.business.stateCode, '29');
   assert.equal(invoice.body.taxableValue, 299);
   assert.equal(invoice.body.cgst, 7.48);
   assert.equal(invoice.body.sgst, 7.48);

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { walletSplit, entryLabel, referralMessage } from '../src/wallet.js';
-import { gstBreakdown, formatRupees, GSTIN, RESTAURANT_HSN } from '../src/gst.js';
+import { gstBreakdown, formatRupees, GSTIN, RESTAURANT_HSN, rupeesInWords, paymentMode } from '../src/gst.js';
 import { faqEntries, formatTime } from '../src/faq.js';
 import { deadlineMessage, deadlineRisk, daysUntilDeadline, etaText, RISK } from '../src/deadline.js';
 import { statusOf, skipAvailability, scheduleByDate, upcomingTotals, planSummary, formatMealDate, withinDays } from '../src/schedule.js';
@@ -309,4 +309,19 @@ test('rupee amounts show paise only when there are any', () => {
   assert.equal(formatRupees(299), '₹299');
   assert.equal(formatRupees(313.9), '₹313.90');
   assert.equal(formatRupees(135.46), '₹135.46');
+});
+
+test('invoice amounts read in Indian words', () => {
+  assert.equal(rupeesInWords(314), 'Rupees Three Hundred Fourteen Only');
+  assert.equal(rupeesInWords(136), 'Rupees One Hundred Thirty Six Only');
+  assert.equal(rupeesInWords(5774), 'Rupees Five Thousand Seven Hundred Seventy Four Only');
+  assert.equal(rupeesInWords(125000), 'Rupees One Lakh Twenty Five Thousand Only');
+  assert.equal(rupeesInWords(313.96), 'Rupees Three Hundred Thirteen and Ninety Six Paise Only');
+  assert.equal(rupeesInWords(0), 'Rupees Zero Only');
+});
+
+test('payment mode names how the invoice was settled', () => {
+  assert.equal(paymentMode({ walletApplied: 0, amountPaid: 314 }), 'UPI');
+  assert.equal(paymentMode({ walletApplied: 50, amountPaid: 264 }), 'Wallet + UPI');
+  assert.equal(paymentMode({ walletApplied: 314, amountPaid: 0 }), 'Wallet');
 });

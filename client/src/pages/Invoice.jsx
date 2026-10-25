@@ -3,6 +3,7 @@ import { Link, useLocation, useParams } from 'react-router-dom';
 import BackToMenu from '../components/BackToMenu';
 import { getInvoice } from '../api';
 import { useAuth } from '../context/AuthContext';
+import { paymentMode, rupeesInWords } from '../gst';
 
 function formatDate(iso) {
   return new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
@@ -38,18 +39,21 @@ export default function Invoice() {
 
       <div className="invoice-card">
         <p className="invoice-title">{taxInvoice ? 'Tax Invoice' : 'Invoice'}</p>
+        {taxInvoice && <p className="invoice-subtitle">Original for Recipient</p>}
         <div className="invoice-header">
           <div>
             <h2>{invoice.business.name}</h2>
             <p>{invoice.business.address}</p>
             {invoice.business.gstin && <p><strong>GSTIN:</strong> {invoice.business.gstin}</p>}
+            {invoice.business.stateCode && <p>State: {invoice.business.state} (Code {invoice.business.stateCode})</p>}
           </div>
           <div className="invoice-meta">
             <p><strong>Invoice No:</strong> {invoice.invoiceNumber}</p>
             <p><strong>Invoice Date:</strong> {formatDate(invoice.date)}</p>
             <p><strong>Order No:</strong> #{invoice.orderNumber}</p>
+            {invoice.placeOfSupply && <p><strong>Place of Supply:</strong> {invoice.placeOfSupply}</p>}
             <p><strong>Status:</strong> {invoice.status?.replaceAll('_', ' ')}</p>
-            <p><strong>Delivery:</strong> {invoice.scheduledDate ? `${invoice.scheduledDate} · ${invoice.timeSlot}` : 'No scheduled delivery'}</p>
+            {invoice.scheduledDate && <p><strong>Delivery:</strong> {invoice.scheduledDate} · {invoice.timeSlot}</p>}
           </div>
         </div>
 
@@ -66,6 +70,7 @@ export default function Invoice() {
             <tr>
               <th>Item</th>
               {taxInvoice && <th>HSN/SAC</th>}
+              {taxInvoice && <th>GST</th>}
               <th>Qty</th>
               <th>Rate (₹)</th>
               <th>{taxInvoice ? 'Taxable value (₹)' : 'Total (₹)'}</th>
@@ -79,6 +84,7 @@ export default function Invoice() {
                   {item.customisation && <span className="invoice-item-note">{item.customisation}</span>}
                 </td>
                 {taxInvoice && <td>{invoice.hsn}</td>}
+                {taxInvoice && <td>{invoice.cgstRate + invoice.sgstRate}%</td>}
                 <td>{item.quantity}</td>
                 <td>{money(item.price)}</td>
                 <td>{money(item.lineTotal)}</td>
@@ -130,12 +136,17 @@ export default function Invoice() {
           )}
         </div>
 
+        <div className="invoice-words">
+          <p>Amount in words: <strong>{rupeesInWords(invoice.total)}</strong></p>
+          <p>Payment mode: <strong>{paymentMode(invoice)}</strong></p>
+        </div>
+
         {taxInvoice && (
           <p className="invoice-footnote">
             Supply of restaurant services (SAC {invoice.hsn}), intra-state, Karnataka. Tax not payable under reverse charge.
           </p>
         )}
-        <p className="invoice-footnote">This is a computer-generated invoice and needs no signature.</p>
+        <p className="invoice-footnote">E. &amp; O.E. Subject to Bengaluru jurisdiction. This is a computer-generated invoice and needs no signature.</p>
       </div>
 
       <button className="btn-primary no-print" onClick={() => window.print()}>Print / Save as PDF</button>

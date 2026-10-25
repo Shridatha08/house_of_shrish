@@ -1598,6 +1598,23 @@ button.subscription-calendar-day:disabled {
   color: #666;
 }
 
+.invoice-subtitle {
+  margin: -8px 0 12px;
+  text-align: center;
+  font-size: 0.75rem;
+  color: #999;
+}
+
+.invoice-words {
+  margin-top: 16px;
+  font-size: 0.85rem;
+  color: #444;
+}
+
+.invoice-words p {
+  margin: 2px 0;
+}
+
 .invoice-header {
   display: flex;
   justify-content: space-between;
