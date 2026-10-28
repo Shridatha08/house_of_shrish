@@ -22,7 +22,7 @@ function fixture() {
       { id: 1, name: 'Single Meal', category: 'Pure Veg Meals', price: 129, customisations: ['Meal A', 'Meal B'] },
       { id: 2, name: 'Monthly (Lunch)', category: 'Pure Veg Meals', price: 3299, customisations: ['Meal A', 'Meal B'] },
       { id: 4, name: 'Monthly (Lunch + Dinner)', category: 'Pure Veg Meals', price: 5499, customisations: ['Meal A', 'Meal B'] },
-      { id: 6, name: 'Dry Fruits Ladoo', category: 'Artisanal Sweets', price: 299, variants: [{ label: '200g', price: 299 }, { label: '500g', price: 699 }] }
+      { id: 6, name: 'Dry Fruits Ladoo', category: 'Artisanal Sweets', price: 129, variants: [{ label: '100g', price: 129 }, { label: '500g', price: 699 }] }
     ]
   };
 }
@@ -136,7 +136,7 @@ function application(data = fixture(), { env = {}, fetch } = {}) {  let state = 
 
 async function purchase(app, itemId = 1, extra = {}) {
   return app.request('post', '/api/orders', {
-    items: [{ id: itemId, quantity: 1, customisation: itemId === 6 ? '200g' : 'Meal A' }], customer, ...extra
+    items: [{ id: itemId, quantity: 1, customisation: itemId === 6 ? '100g' : 'Meal A' }], customer, ...extra
   });
 }
 
@@ -189,13 +189,13 @@ test('orders charge 2.5% CGST and 2.5% SGST on top of the menu price', async () 
   const app = application();
   const created = await purchase(app, 6);
   const order = created.body.order;
-  assert.equal(order.taxableValue, 299);
+  assert.equal(order.taxableValue, 129);
   assert.equal(order.cgstRate, 2.5);
-  assert.equal(order.cgst, 7.48);
+  assert.equal(order.cgst, 3.23);
   assert.equal(order.sgstRate, 2.5);
-  assert.equal(order.sgst, 7.48);
-  assert.equal(order.roundOff, 0.04, 'rounded up to the next rupee');
-  assert.equal(order.total, 314);
+  assert.equal(order.sgst, 3.23);
+  assert.equal(order.roundOff, 0.54, 'rounded up to the next rupee');
+  assert.equal(order.total, 136);
   assert.equal(order.invoiceNumber, undefined, 'numbered only once paid');
 });
 
@@ -222,12 +222,12 @@ test('verified orders get a GST tax invoice numbered consecutively per IST day',
   assert.equal(invoice.body.hsn, '9963');
   assert.equal(invoice.body.placeOfSupply, 'Karnataka (29)');
   assert.equal(invoice.body.business.stateCode, '29');
-  assert.equal(invoice.body.taxableValue, 299);
-  assert.equal(invoice.body.cgst, 7.48);
-  assert.equal(invoice.body.sgst, 7.48);
-  assert.equal(invoice.body.roundOff, 0.04);
-  assert.equal(invoice.body.total, 314);
-  assert.equal(invoice.body.amountPaid, 314);
+  assert.equal(invoice.body.taxableValue, 129);
+  assert.equal(invoice.body.cgst, 3.23);
+  assert.equal(invoice.body.sgst, 3.23);
+  assert.equal(invoice.body.roundOff, 0.54);
+  assert.equal(invoice.body.total, 136);
+  assert.equal(invoice.body.amountPaid, 136);
   assert.equal((await app.request('get', '/api/orders/:id/invoice', {}, { id: first })).body.invoiceNumber, '10102026_02');
 
   // 00:30 IST on the 11th: a new day restarts the sequence.
@@ -245,8 +245,8 @@ test('a wallet-settled order is invoiced for its full value', async () => {
   const created = await purchase(app, 6, { useWallet: true });
   const invoice = await app.request('get', '/api/orders/:id/invoice', {}, { id: created.body.order.id });
   assert.equal(invoice.body.invoiceNumber, '10102026_01');
-  assert.equal(invoice.body.total, 314);
-  assert.equal(invoice.body.walletApplied, 314);
+  assert.equal(invoice.body.total, 136);
+  assert.equal(invoice.body.walletApplied, 136);
   assert.equal(invoice.body.amountPaid, 0);
 });
 
@@ -454,6 +454,57 @@ test('Single Meal lunch/dinner cutoffs remain IST while monthly/ladoo can order 
   assert.equal((await purchase(app)).code, 409);
   assert.equal((await purchase(app, 2)).code, 201);
   assert.equal((await purchase(app, 6)).code, 201);
+});
+
+test('a combined Single Meal is charged and counted as two portions', async () => {
+  const app = application();
+  app.clock('2026-10-10T04:00:00Z');
+
+  const created = await app.request('post', '/api/orders', {
+    items: [{
+      id: 1,
+      quantity: 1,
+      customisation: 'Meal A',
+      mealService: 'both'
+    }],
+    customer
+  });
+
+  assert.equal(created.code, 201);
+  assert.equal(created.body.order.taxableValue, 258);
+  assert.equal(created.body.order.items[0].price, 258);
+  assert.equal(created.body.order.items[0].mealService, 'both');
+  assert.equal(created.body.order.mealService, 'both');
+  assert.deepEqual(Array.from(created.body.order.mealServices), ['lunch', 'dinner']);
+  assert.equal(created.body.order.timeSlot, 'both');
+
+  const capacityLimited = application();
+  capacityLimited.state().settings.dailyOrderCapacity = 1;
+  capacityLimited.clock('2026-10-10T04:00:00Z');
+  const rejected = await capacityLimited.request('post', '/api/orders', {
+    items: [{
+      id: 1,
+      quantity: 1,
+      customisation: 'Meal A',
+      mealService: 'both'
+    }],
+    customer
+  });
+  assert.equal(rejected.code, 409);
+});
+
+test('explicit Single Meal service must still be before its cutoff', async () => {
+  const app = application();
+  app.clock('2026-10-10T05:30:00Z');
+
+  const request = (mealService) => app.request('post', '/api/orders', {
+    items: [{ id: 1, quantity: 1, customisation: 'Meal A', mealService }],
+    customer
+  });
+
+  assert.equal((await request('lunch')).code, 409);
+  assert.equal((await request('both')).code, 409);
+  assert.equal((await request('dinner')).code, 201);
 });
 
 test('future preferred start dates are stored, invalid/past dates rejected', async () => {
@@ -767,7 +818,7 @@ test('meals are limited to the delivery radius; sweets are not', async () => {
   const nearby = { ...customer, lat: 12.9744, lng: 77.6743 };           // at the kitchen
   const farAway = { ...customer, lat: 12.9716, lng: 77.5946 };          // ~9km away
   const meal = [{ id: 1, quantity: 1, customisation: 'Meal A' }];
-  const ladoo = [{ id: 6, quantity: 1, customisation: '200g' }];
+  const ladoo = [{ id: 6, quantity: 1, customisation: '100g' }];
 
   const denied = await app.request('post', '/api/orders', { items: meal, customer: farAway }, {}, {});
   assert.equal(denied.code, 409);
@@ -1051,7 +1102,7 @@ test('an abandoned order stops blocking once it expires', async () => {
 test('one customer cannot block another', async () => {
   const app = application();
   const guest = (phone) => app.request('post', '/api/orders', {
-    items: [{ id: 6, quantity: 1, customisation: '200g' }], customer: { ...customer, phone }
+    items: [{ id: 6, quantity: 1, customisation: '100g' }], customer: { ...customer, phone }
   }, {}, {});
 
   for (let i = 0; i < 3; i++) assert.equal((await guest('9111111111')).code, 201);
@@ -1351,7 +1402,7 @@ test('the run labels each stop as lunch, dinner or sweets', async () => {
     {
       id: 903, orderNumber: '903', userId: 2, status: 'paid', paymentStatus: 'verified',
       createdAt: now, scheduledDate: '2026-10-10', mealService: null,
-      items: [{ id: 6, name: 'Dry Fruits Ladoo', price: 299, quantity: 2, customisation: '200g' }],
+      items: [{ id: 6, name: 'Dry Fruits Ladoo', price: 299, quantity: 2, customisation: '100g' }],
       customer: { ...customer, lat: 12.9752, lng: 77.6752 }
     }
   ];
@@ -1377,6 +1428,75 @@ test('the run labels each stop as lunch, dinner or sweets', async () => {
   assert.equal(run.body.stops.every((stop) => typeof stop.group === 'string' && stop.group), true);
 });
 
+test('a combined order creates separately trackable lunch and dinner stops', async () => {
+  const data = driverFixture();
+  data.orders = [{
+    id: 905,
+    orderNumber: '905',
+    userId: 1,
+    status: 'paid',
+    paymentStatus: 'verified',
+    createdAt: now,
+    scheduledDate: '2026-10-10',
+    mealService: 'both',
+    mealServices: ['lunch', 'dinner'],
+    outForDeliveryServices: [],
+    deliveredServices: [],
+    items: [{
+      id: 1,
+      name: 'Single Meal',
+      price: 258,
+      quantity: 1,
+      customisation: 'Meal A',
+      mealService: 'both'
+    }],
+    customer
+  }];
+  const app = application(data);
+  const run = async () => (await app.request(
+    'get',
+    '/api/driver/deliveries',
+    {},
+    {},
+    driverAuth
+  )).body.stops;
+
+  const stops = await run();
+  assert.deepEqual(
+    Array.from(stops, (stop) => stop)
+      .filter((stop) => stop.kind === 'order')
+      .map((stop) => stop.id)
+      .sort(),
+    ['905:dinner', '905:lunch']
+  );
+  assert.equal(stops.find((stop) => stop.id === '905:lunch').group, 'lunch');
+  assert.equal(stops.find((stop) => stop.id === '905:dinner').group, 'dinner');
+
+  const stage = (service, value) => app.request(
+    'post',
+    '/api/driver/deliveries/:id/stage',
+    { stage: value },
+    { id: `905:${service}` },
+    driverAuth
+  );
+  assert.equal((await stage('lunch', 'out_for_delivery')).code, 204);
+  assert.equal((await stage('lunch', 'delivered')).code, 204);
+  assert.equal(app.state().orders[0].status, 'out_for_delivery');
+  assert.deepEqual(
+    Array.from(app.state().orders[0].deliveredServices),
+    ['lunch']
+  );
+  assert.equal((await run()).find((stop) => stop.id === '905:dinner').delivered, false);
+
+  assert.equal((await stage('dinner', 'out_for_delivery')).code, 204);
+  assert.equal((await stage('dinner', 'delivered')).code, 204);
+  assert.equal(app.state().orders[0].status, 'delivered');
+  assert.deepEqual(
+    Array.from(app.state().orders[0].deliveredServices),
+    ['lunch', 'dinner']
+  );
+});
+
 test('an order mixing a meal and sweets rides with its meal slot', async () => {
   const data = driverFixture();
   data.orders = [{
@@ -1384,7 +1504,7 @@ test('an order mixing a meal and sweets rides with its meal slot', async () => {
     createdAt: now, scheduledDate: '2026-10-10', mealService: 'dinner',
     items: [
       { id: 1, name: 'Single Meal', price: 129, quantity: 1, customisation: 'Meal A' },
-      { id: 6, name: 'Dry Fruits Ladoo', price: 299, quantity: 1, customisation: '200g' }
+      { id: 6, name: 'Dry Fruits Ladoo', price: 299, quantity: 1, customisation: '100g' }
     ],
     customer: { ...customer }
   }];
@@ -1681,6 +1801,23 @@ test('a new price is what the customer is charged', async () => {
   assert.equal(order.body.order.total, 157);
 });
 
+test('the 100g ladoo option is priced at ₹129', async () => {
+  const app = application();
+  const ladoo = app.state().menu.find((item) => item.id === 6);
+  assert.equal(ladoo.price, 129);
+  assert.deepEqual(
+    Array.from(ladoo.variants, (variant) => `${variant.label}:${variant.price}`),
+    ['100g:129', '500g:699']
+  );
+
+  const order = await purchase(app, 6);
+  assert.equal(order.code, 201);
+  assert.equal(order.body.order.items[0].customisation, '100g');
+  assert.equal(order.body.order.items[0].price, 129);
+  assert.equal(order.body.order.taxableValue, 129);
+  assert.equal(order.body.order.total, 136);
+});
+
 test('variant prices are edited by size, and charged by size', async () => {
   const app = application();
   const updated = await app.request('patch', '/api/admin/menu/:id',
@@ -1690,7 +1827,7 @@ test('variant prices are edited by size, and charged by size', async () => {
 
   const variants = app.state().menu.find((item) => item.id === 6).variants;
   assert.equal(variants.find((v) => v.label === '500g').price, 749);
-  assert.equal(variants.find((v) => v.label === '200g').price, 299, 'other sizes untouched');
+  assert.equal(variants.find((v) => v.label === '100g').price, 129, 'other sizes untouched');
 
   const order = await app.request('post', '/api/orders', {
     items: [{ id: 6, quantity: 1, customisation: '500g' }], customer
@@ -1781,7 +1918,7 @@ test('nobody is paid until the referred friend actually buys something', async (
   assert.equal((app.state().walletEntries || []).length, 0);
 
   const order = await app.request('post', '/api/orders', {
-    items: [{ id: 6, quantity: 1, customisation: '200g' }], customer
+    items: [{ id: 6, quantity: 1, customisation: '100g' }], customer
   }, {}, { authorization: `Bearer ${joined.body.token}` });
   // Placing it is not enough either; payment has to be verified.
   assert.equal((app.state().walletEntries || []).length, 0);
@@ -1799,7 +1936,7 @@ test('a referral pays out exactly once', async () => {
 
   for (let i = 0; i < 3; i++) {
     const order = await app.request('post', '/api/orders', {
-      items: [{ id: 6, quantity: 1, customisation: '200g' }], customer
+      items: [{ id: 6, quantity: 1, customisation: '100g' }], customer
     }, {}, token);
     await verifyPayment(app, order.body.order.id, token);
   }
@@ -1834,12 +1971,12 @@ test('wallet credit comes off the amount the customer is asked to pay', async ()
   app.state().users[0].walletBalance = 50;
 
   const order = await app.request('post', '/api/orders', {
-    items: [{ id: 6, quantity: 1, customisation: '200g' }], customer, useWallet: true
+    items: [{ id: 6, quantity: 1, customisation: '100g' }], customer, useWallet: true
   });
-  assert.equal(order.body.order.subtotal, 314);
+  assert.equal(order.body.order.subtotal, 136);
   assert.equal(order.body.order.walletApplied, 50);
-  assert.equal(order.body.order.total, 264);
-  assert.match(order.body.upiUri, /am=264/);
+  assert.equal(order.body.order.total, 86);
+  assert.match(order.body.upiUri, /am=86/);
   assert.equal(app.state().users[0].walletBalance, 0, 'the credit is spent');
 });
 
@@ -1863,9 +2000,9 @@ test('credit is not spent unless the customer asks', async () => {
   app.state().users[0].walletBalance = 50;
 
   const order = await app.request('post', '/api/orders', {
-    items: [{ id: 6, quantity: 1, customisation: '200g' }], customer
+    items: [{ id: 6, quantity: 1, customisation: '100g' }], customer
   });
-  assert.equal(order.body.order.total, 314);
+  assert.equal(order.body.order.total, 136);
   assert.equal(order.body.order.walletApplied, 0);
   assert.equal(app.state().users[0].walletBalance, 50);
 });
@@ -1874,7 +2011,7 @@ test('cancelling returns the credit, and only once', async () => {
   const app = application();
   app.state().users[0].walletBalance = 50;
   const order = await app.request('post', '/api/orders', {
-    items: [{ id: 6, quantity: 1, customisation: '200g' }], customer, useWallet: true
+    items: [{ id: 6, quantity: 1, customisation: '100g' }], customer, useWallet: true
   });
   assert.equal(app.state().users[0].walletBalance, 0);
 
@@ -1889,7 +2026,7 @@ test('the ledger explains every balance', async () => {
   const app = application();
   app.state().users[0].walletBalance = 50;
   await app.request('post', '/api/orders', {
-    items: [{ id: 6, quantity: 1, customisation: '200g' }], customer, useWallet: true
+    items: [{ id: 6, quantity: 1, customisation: '100g' }], customer, useWallet: true
   });
 
   const wallet = await app.request('get', '/api/wallet');
@@ -1905,7 +2042,7 @@ test('deleting an account takes its wallet history with it', async () => {
   const app = application();
   app.state().users[0].walletBalance = 50;
   const order = await app.request('post', '/api/orders', {
-    items: [{ id: 6, quantity: 1, customisation: '200g' }], customer, useWallet: true
+    items: [{ id: 6, quantity: 1, customisation: '100g' }], customer, useWallet: true
   });
   await app.request('patch', '/api/orders/:id/cancel', {}, { id: order.body.order.id });
 
@@ -1921,7 +2058,7 @@ test('a referral still settles if the order was verified before referrals existe
   const token = { authorization: `Bearer ${joined.body.token}` };
 
   const order = await app.request('post', '/api/orders', {
-    items: [{ id: 6, quantity: 1, customisation: '200g' }], customer
+    items: [{ id: 6, quantity: 1, customisation: '100g' }], customer
   }, {}, token);
   const id = order.body.order.id;
 
@@ -1944,7 +2081,7 @@ test('a late settle still only pays once', async () => {
   const token = { authorization: `Bearer ${joined.body.token}` };
 
   const order = await app.request('post', '/api/orders', {
-    items: [{ id: 6, quantity: 1, customisation: '200g' }], customer
+    items: [{ id: 6, quantity: 1, customisation: '100g' }], customer
   }, {}, token);
   const id = order.body.order.id;
   await verifyPayment(app, id, token);
@@ -2000,7 +2137,7 @@ test('a referral missed at sign-up can be attached and settles at once', async (
   const friendId = joined.body.user.id;
 
   const order = await app.request('post', '/api/orders', {
-    items: [{ id: 6, quantity: 1, customisation: '200g' }], customer
+    items: [{ id: 6, quantity: 1, customisation: '100g' }], customer
   }, {}, token);
   await verifyPayment(app, order.body.order.id, token);
   assert.equal((app.state().walletEntries || []).length, 0, 'nothing to settle yet');
@@ -2028,7 +2165,7 @@ test('attaching a referral before they order waits for the order', async () => {
   assert.equal((app.state().walletEntries || []).length, 0);
 
   const order = await app.request('post', '/api/orders', {
-    items: [{ id: 6, quantity: 1, customisation: '200g' }], customer
+    items: [{ id: 6, quantity: 1, customisation: '100g' }], customer
   }, {}, token);
   await verifyPayment(app, order.body.order.id, token);
   assert.equal(app.state().users.map((e) => Number(e.walletBalance || 0)).join(','), '50,50');
@@ -2043,7 +2180,7 @@ test('a cancelled order does not count as having bought something', async () => 
   const token = { authorization: `Bearer ${joined.body.token}` };
 
   const order = await app.request('post', '/api/orders', {
-    items: [{ id: 6, quantity: 1, customisation: '200g' }], customer
+    items: [{ id: 6, quantity: 1, customisation: '100g' }], customer
   }, {}, token);
   await app.request('patch', '/api/orders/:id/cancel', {}, { id: order.body.order.id }, token);
 
@@ -2107,7 +2244,7 @@ const deliveredNoteOf = (app) =>
 
 test('a delivered box of sweets is not called a meal', async () => {
   const app = application();
-  await deliverOrder(app, [{ id: 6, quantity: 1, customisation: '200g' }]);
+  await deliverOrder(app, [{ id: 6, quantity: 1, customisation: '100g' }]);
 
   const note = deliveredNoteOf(app);
   assert.match(note.body, /box of homemade goodness/);
@@ -2129,7 +2266,7 @@ test('an order mixing sweets with a meal is treated as a meal', async () => {
   const app = application();
   await deliverOrder(app, [
     { id: 1, quantity: 1, customisation: 'Meal A' },
-    { id: 6, quantity: 1, customisation: '200g' }
+    { id: 6, quantity: 1, customisation: '100g' }
   ]);
 
   assert.match(deliveredNoteOf(app).body, /protein-packed/);
@@ -2137,14 +2274,14 @@ test('an order mixing sweets with a meal is treated as a meal', async () => {
 
 test('the delivered note still names the order', async () => {
   const app = application();
-  const { orderNumber } = await deliverOrder(app, [{ id: 6, quantity: 1, customisation: '200g' }]);
+  const { orderNumber } = await deliverOrder(app, [{ id: 6, quantity: 1, customisation: '100g' }]);
 
   assert.match(deliveredNoteOf(app).body, new RegExp(`Order #${orderNumber}`));
 });
 
 test('tracking a delivered order repeats the same sign-off', async () => {
   const app = application();
-  const { id } = await deliverOrder(app, [{ id: 6, quantity: 1, customisation: '200g' }]);
+  const { id } = await deliverOrder(app, [{ id: 6, quantity: 1, customisation: '100g' }]);
 
   const tracked = await app.request('get', '/api/orders/:id/track', {}, { id }, { authorization: 'Bearer user-token' });
   assert.equal(tracked.body.status, 'delivered');
@@ -2342,7 +2479,7 @@ test('starting online payment opens a gateway session for the exact order total'
 test('online payment needs order access and an order that is still payable', async () => {
   const gateway = youpiGateway();
   const app = application(fixture(), { env: youpiEnv, fetch: gateway.fetch });
-  const guest = await app.request('post', '/api/orders', { items: [{ id: 6, quantity: 1, customisation: '200g' }], customer }, {}, {});
+  const guest = await app.request('post', '/api/orders', { items: [{ id: 6, quantity: 1, customisation: '100g' }], customer }, {}, {});
   const id = guest.body.order.id;
   assert.equal((await app.request('post', '/api/orders/:id/online-payment', {}, { id }, {})).code, 403);
   assert.equal((await app.request('post', '/api/orders/:id/online-payment', {}, { id }, { 'x-order-token': guest.body.accessToken })).code, 200);
@@ -2439,7 +2576,7 @@ test('unpaid orders are cancelled once the 30-minute window passes', async () =>
   const app = application();
   app.state().users[0].walletBalance = 50;
   const lapsing = await app.request('post', '/api/orders', {
-    items: [{ id: 6, quantity: 1, customisation: '200g' }], customer, useWallet: true
+    items: [{ id: 6, quantity: 1, customisation: '100g' }], customer, useWallet: true
   });
   const submitted = await purchase(app);
   await app.request('patch', '/api/orders/:id/mark-paid', {}, { id: submitted.body.order.id });

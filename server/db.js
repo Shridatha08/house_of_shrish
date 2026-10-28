@@ -16,11 +16,11 @@ const defaultData = {
       id: 6,
       name: 'Dry Fruits Ladoo',
       description: 'Naturally sweetened with dates, made with premium dry fruits and crafted with care',
-      price: 299,
+      price: 129,
       category: 'Artisanal Sweets',
       image: 'ladoo.png',
       variants: [
-        { label: '200g', price: 299 },
+        { label: '100g', price: 129 },
         { label: '500g', price: 699 },
         { label: '1000g', price: 1299 }
       ]
@@ -202,6 +202,20 @@ function reconcileMenu(menu) {
     changed = true;
   } else if (existingLadoo.description !== ladoo.description) {
     existingLadoo.description = ladoo.description;
+    changed = true;
+  }
+
+  const oldFirstVariant = existingLadoo?.variants?.some(
+    (variant) => variant.label === '200g'
+  );
+  if (oldFirstVariant) {
+    existingLadoo.variants = [
+      structuredClone(ladoo.variants[0]),
+      ...existingLadoo.variants.filter(
+        (variant) => variant.label !== '200g' && variant.label !== '100g'
+      )
+    ];
+    existingLadoo.price = ladoo.price;
     changed = true;
   }
 

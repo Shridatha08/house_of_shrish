@@ -483,26 +483,46 @@ function buildRunStops(data, today) {
     if (scheduled !== today) continue;
     if (!['paid', 'preparing', 'out_for_delivery'].includes(order.status)) continue;
     if (paymentStatus(order) !== 'verified') continue;
-    stops.push({
-      kind: 'order',
-      id: String(order.id),
-      reference: `#${order.orderNumber}`,
-      customerName: order.customer.name,
-      customerPhone: order.customer.phone,
-      address: order.customer.address,
-      flatNumber: order.customer.flatNumber || '',
-      pincode: order.customer.pincode || '',
-      lat: order.customer.lat ?? null,
-      lng: order.customer.lng ?? null,
-      items: order.items.map((item) => `${item.quantity}× ${item.name}`),
-      // Lets the driver app load and run lunch, dinner and sweets separately.
-      group: order.mealService || (order.items.every(isSweet) ? 'sweets' : 'other'),
-      status: order.status,
-      stage: order.status === 'delivered'
-        ? 'delivered'
-        : order.status === 'out_for_delivery' ? 'out_for_delivery' : 'pending',
-      delivered: order.status === 'delivered'
-    });
+    const services = order.mealServices?.length
+      ? order.mealServices
+      : mealServiceSlots(order.mealService);
+    for (const service of services.length ? services : [null]) {
+      const multipleServices = services.length > 1;
+      const delivered = multipleServices
+        ? (order.deliveredServices || []).includes(service)
+        : order.status === 'delivered';
+      const outForDelivery = multipleServices
+        ? (order.outForDeliveryServices || []).includes(service)
+        : order.status === 'out_for_delivery';
+      const items = multipleServices
+        ? order.items.filter((item) => {
+            if (item.mealService === 'both' || item.mealService === service) return true;
+            if (item.mealService) return false;
+            const menuItem = menuById.get(item.id);
+            const isMeal = menuItem?.category === 'Pure Veg Meals' &&
+              !menuItem.name.toLowerCase().startsWith('monthly');
+            return !isMeal && service === services[0];
+          })
+        : order.items;
+      stops.push({
+        kind: 'order',
+        id: multipleServices ? `${order.id}:${service}` : String(order.id),
+        reference: `#${order.orderNumber}`,
+        customerName: order.customer.name,
+        customerPhone: order.customer.phone,
+        address: order.customer.address,
+        flatNumber: order.customer.flatNumber || '',
+        pincode: order.customer.pincode || '',
+        lat: order.customer.lat ?? null,
+        lng: order.customer.lng ?? null,
+        items: items.map((item) => `${item.quantity}× ${item.name}`),
+        // Each service gets its own stop when one order spans lunch and dinner.
+        group: service || (order.items.every(isSweet) ? 'sweets' : 'other'),
+        status: delivered ? 'delivered' : outForDelivery ? 'out_for_delivery' : order.status,
+        stage: delivered ? 'delivered' : outForDelivery ? 'out_for_delivery' : 'pending',
+        delivered
+      });
+    }
   }
 
   for (const subscription of data.subscriptions) {
@@ -680,14 +700,15 @@ function monthlyCoverageConflict(data, userId, monthlyItems) {
 
 function stockUsed(data, date, itemId) {
   return data.orders.filter((order) => reservesStock(order) && businessDate(order.createdAt) === date)
-    .reduce((total, order) => total + order.items.filter((item) => item.id === itemId).reduce((quantity, item) => quantity + item.quantity, 0), 0);
+    .reduce((total, order) => total + order.items.filter((item) => item.id === itemId)
+      .reduce((quantity, item) => quantity + item.quantity * (item.mealService === 'both' ? 2 : 1), 0), 0);
 }
 
 function kitchenMealCount(data, date) {
   const menuById = new Map(data.menu.map((item) => [item.id, item]));
   const purchases = data.orders.filter((order) => reservesStock(order) && (order.scheduledDate || businessDate(order.createdAt)) === date)
     .reduce((total, order) => total + order.items.filter((item) => menuById.get(item.id)?.category === 'Pure Veg Meals' && !item.name.toLowerCase().startsWith('monthly'))
-      .reduce((quantity, item) => quantity + item.quantity, 0), 0);
+      .reduce((quantity, item) => quantity + item.quantity * (item.mealService === 'both' ? 2 : 1), 0), 0);
   const subscriptions = data.subscriptions.filter((subscription) => subscriptionInService(subscription, data))
     .reduce((total, subscription) => total + buildSubscriptionSchedule(subscription, subscriptionHolidays(data)).schedule
       .filter((entry) => entry.date === date && entry.status !== 'skipped').length, 0);
@@ -758,6 +779,17 @@ function getOrderMealService(settings, now = new Date()) {
   if (isBeforeCutoff(settings.lunchCutoffTime, now)) return 'lunch';
   if (isBeforeCutoff(settings.dinnerCutoffTime, now)) return 'dinner';
   return null;
+}
+
+function mealServiceSlots(service) {
+  if (service === 'both') return ['lunch', 'dinner'];
+  return ['lunch', 'dinner'].includes(service) ? [service] : [];
+}
+
+function mealServiceIsOpen(service, settings, now = new Date()) {
+  return mealServiceSlots(service).every((meal) =>
+    isBeforeCutoff(settings[`${meal}CutoffTime`], now)
+  );
 }
 
 function todayStr() {
@@ -1368,6 +1400,71 @@ async function advanceStop(db, driver, stopId, stage) {
       title: 'Delivered',
       body: `${subscription.itemName} ${mealLabel} delivered.`,
       data: { type: 'delivery_progress', subscriptionId: subscription.id, date, meal, status: 'delivered' }
+    });
+    return { code: 204 };
+  }
+
+  const [orderIdPart, orderService] = stopId.split(':');
+  if (['lunch', 'dinner'].includes(orderService)) {
+    const order = db.data.orders.find((entry) => entry.id === Number(orderIdPart));
+    if (!order) return { code: 404, error: 'Delivery not found.' };
+    const services = order.mealServices?.length
+      ? order.mealServices
+      : mealServiceSlots(order.mealService);
+    if (services.length < 2 || !services.includes(orderService)) {
+      return { code: 404, error: 'Delivery not found.' };
+    }
+
+    order.outForDeliveryServices ||= [];
+    order.deliveredServices ||= [];
+    const now = new Date().toISOString();
+    if (order.deliveredServices.includes(orderService)) {
+      return { code: 409, error: 'That meal is already delivered.', alreadyDone: true };
+    }
+    if (stage === 'out_for_delivery') {
+      if (order.outForDeliveryServices.includes(orderService)) return { code: 204 };
+      if (!['paid', 'preparing', 'out_for_delivery'].includes(order.status)) {
+        return { code: 409, error: 'This order cannot go out for delivery.' };
+      }
+      order.outForDeliveryServices.push(orderService);
+      order.status = 'out_for_delivery';
+    } else {
+      if (!order.outForDeliveryServices.includes(orderService)) {
+        return { code: 409, error: 'Mark the meal out for delivery first.' };
+      }
+      order.deliveredServices.push(orderService);
+      order.status = services.every((service) =>
+        order.deliveredServices.includes(service)
+      ) ? 'delivered' : 'out_for_delivery';
+    }
+
+    order.statusUpdatedAt = now;
+    order.driverId = driver.id;
+    await db.write();
+    const isDelivered = stage === 'delivered';
+    const serviceLabel = orderService === 'dinner' ? 'dinner' : 'lunch';
+    const title = isDelivered ? 'Delivered' : 'On the way';
+    await notifyOrder(db, order, {
+      title,
+      body: isDelivered
+        ? `Your ${serviceLabel} meal has been delivered.`
+        : `Your ${serviceLabel} meal is out for delivery.`,
+      data: {
+        type: 'order_status',
+        orderId: order.id,
+        status: order.status,
+        mealService: orderService
+      }
+    });
+    await notifyAdmins(db, {
+      title,
+      body: `#${order.orderNumber} · ${serviceLabel} · ${order.customer.name}`,
+      data: {
+        type: 'delivery_progress',
+        orderId: order.id,
+        status: order.status,
+        mealService: orderService
+      }
     });
     return { code: 204 };
   }
@@ -2250,10 +2347,27 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
   if (!cutoffExempt && !mealService) {
     return res.status(409).json({ error: `Single Meal orders close at ${settings.dinnerCutoffTime} IST. Lunch cutoff is ${settings.lunchCutoffTime} IST.` });
   }
-  const requestedMeals = items.filter((line) => {
+  for (const line of items) {
+    const menuItem = menuById.get(Number(line.id));
+    if (line.mealService !== undefined) {
+      if (menuItem?.name.toLowerCase() !== 'single meal' ||
+          !['lunch', 'dinner', 'both'].includes(line.mealService)) {
+        return res.status(400).json({ error: 'Invalid meal service for Single Meal.' });
+      }
+      if (!mealServiceIsOpen(line.mealService, settings)) {
+        return res.status(409).json({ error: 'That meal service has passed its cutoff.' });
+      }
+    }
+  }
+  const requestedMeals = items.reduce((total, line) => {
     const item = menuById.get(Number(line.id));
-    return item?.category === 'Pure Veg Meals' && !item.name.toLowerCase().startsWith('monthly');
-  }).reduce((total, line) => total + Number(line.quantity), 0);
+    if (item?.category !== 'Pure Veg Meals' ||
+        item.name.toLowerCase().startsWith('monthly')) return total;
+    const service = item.name.toLowerCase() === 'single meal'
+      ? line.mealService || mealService
+      : mealService;
+    return total + Number(line.quantity) * (service === 'both' ? 2 : 1);
+  }, 0);
   if (requestedMeals > 0 && kitchenMealCount(db.data, today) + requestedMeals > settings.dailyOrderCapacity) return res.status(409).json({ error: 'Kitchen capacity for today has been reached.' });
 
   const user = await getUserFromToken(db, req);
@@ -2293,7 +2407,9 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
     const requestedForItem = items.filter((item) => Number(item.id) === menuItem.id).reduce((total, item) => total + Number(item.quantity), 0);
     if (menuItem.name.toLowerCase().startsWith('monthly') && requestedForItem !== 1) return res.status(400).json({ error: 'Order one subscription per monthly plan at a time.' });
     if (Number.isInteger(menuItem.dailyStock)) {
-      if (stockUsed(db.data, today, menuItem.id) + requestedForItem > menuItem.dailyStock) return res.status(409).json({ error: `${menuItem.name} has reached its daily stock limit.` });
+      const requestedStock = items.filter((item) => Number(item.id) === menuItem.id)
+        .reduce((sum, item) => sum + Number(item.quantity) * (item.mealService === 'both' ? 2 : 1), 0);
+      if (stockUsed(db.data, today, menuItem.id) + requestedStock > menuItem.dailyStock) return res.status(409).json({ error: `${menuItem.name} has reached its daily stock limit.` });
     }
     let customisation = '';
     let unitPrice = menuItem.price;
@@ -2308,9 +2424,35 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
       }
       customisation = line.customisation;
     }
-    total += unitPrice * quantity;
-    orderItems.push({ id: menuItem.id, name: menuItem.name, price: unitPrice, quantity, customisation });
+    const isMeal = menuItem.category === 'Pure Veg Meals' &&
+      !menuItem.name.toLowerCase().startsWith('monthly');
+    const lineMealService = isMeal
+      ? menuItem.name.toLowerCase() === 'single meal'
+        ? line.mealService || mealService
+        : mealService
+      : null;
+    const portionCount = lineMealService === 'both' ? 2 : 1;
+    const orderPrice = unitPrice * portionCount;
+    total += orderPrice * quantity;
+    orderItems.push({
+      id: menuItem.id,
+      name: menuItem.name,
+      price: orderPrice,
+      quantity,
+      customisation,
+      ...(lineMealService ? { mealService: lineMealService } : {})
+    });
   }
+
+  const requestedMealServices = new Set(orderItems.flatMap((item) =>
+    mealServiceSlots(item.mealService)
+  ));
+  const mealServices = ['lunch', 'dinner'].filter((service) =>
+    requestedMealServices.has(service)
+  );
+  const orderMealService = mealServices.length > 1
+    ? 'both'
+    : mealServices[0] || mealService;
 
   const orderId = crypto.randomBytes(6).readUIntBE(0, 6);
   const accessToken = crypto.randomBytes(24).toString('hex');
@@ -2343,9 +2485,14 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
     total,
     userId: user?.id || null,
     accessToken,
-    mealService,
-    scheduledDate: mealService ? today : null,
-    timeSlot: mealService,
+    mealService: orderMealService,
+    mealServices,
+    scheduledDate: mealServices.length > 0 ? today : null,
+    timeSlot: orderMealService,
+    ...(mealServices.length > 1 ? {
+      outForDeliveryServices: [],
+      deliveredServices: []
+    } : {}),
     customer: {
       name: customer.name.trim(),
       phone: customer.phone.trim(),

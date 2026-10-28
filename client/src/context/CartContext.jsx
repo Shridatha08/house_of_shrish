@@ -2,8 +2,8 @@ import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 
 const CartContext = createContext(null);
 
-function makeKey(id, customisation) {
-  return `${id}::${customisation || ''}`;
+function makeKey(id, customisation, mealService) {
+  return `${id}::${customisation || ''}${mealService ? `::${mealService}` : ''}`;
 }
 
 export function CartProvider({ children }) {
@@ -20,8 +20,8 @@ export function CartProvider({ children }) {
     sessionStorage.setItem('houseOfShrishCart', JSON.stringify(items));
   }, [items]);
 
-  function addItem(menuItem, customisation) {
-    const key = makeKey(menuItem.id, customisation);
+  function addItem(menuItem, customisation, mealService) {
+    const key = makeKey(menuItem.id, customisation, mealService);
     const variant = menuItem.variants?.find((option) => option.label === customisation);
     const price = variant?.price ?? menuItem.price;
     setItems((prev) => {
@@ -34,7 +34,15 @@ export function CartProvider({ children }) {
       }
       return [
         ...prev,
-        { key, id: menuItem.id, name: menuItem.name, price, quantity: 1, customisation: customisation || '' }
+        {
+          key,
+          id: menuItem.id,
+          name: menuItem.name,
+          price,
+          quantity: 1,
+          customisation: customisation || '',
+          ...(mealService ? { mealService } : {})
+        }
       ];
     });
   }
@@ -55,7 +63,10 @@ export function CartProvider({ children }) {
     setItems([]);
   }
 
-  const total = useMemo(() => items.reduce((sum, i) => sum + i.price * i.quantity, 0), [items]);
+  const total = useMemo(
+    () => items.reduce((sum, i) => sum + i.price * i.quantity * (i.mealService === 'both' ? 2 : 1), 0),
+    [items]
+  );
   const count = useMemo(() => items.reduce((sum, i) => sum + i.quantity, 0), [items]);
 
   const value = { items, addItem, decreaseItem, removeItem, clearCart, total, count, makeKey };

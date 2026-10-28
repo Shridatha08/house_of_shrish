@@ -102,7 +102,12 @@ export default function Checkout() {
     try {
       const { order, upiUri, accessToken } = await placeOrder(
         {
-          items: items.map((i) => ({ id: i.id, quantity: i.quantity, customisation: i.customisation })),
+          items: items.map((i) => ({
+            id: i.id,
+            quantity: i.quantity,
+            customisation: i.customisation,
+            ...(i.mealService ? { mealService: i.mealService } : {})
+          })),
           customer: {
             name,
             phone,
@@ -139,13 +144,20 @@ export default function Checkout() {
               <span className="cart-row-name">
                 {item.name}
                 {item.customisation && <span className="cart-row-note">{item.customisation}</span>}
+                {item.mealService && (
+                  <span className="cart-row-note">
+                    {item.mealService === 'both'
+                      ? 'Lunch + Dinner'
+                      : item.mealService[0].toUpperCase() + item.mealService.slice(1)}
+                  </span>
+                )}
               </span>
               <div className="qty-control">
                 <button type="button" onClick={() => decreaseItem(item.key)}>−</button>
                 <span>{item.quantity}</span>
-                <button type="button" onClick={() => addItem(item, item.customisation)}>+</button>
+                <button type="button" onClick={() => addItem(item, item.customisation, item.mealService)}>+</button>
               </div>
-              <span className="cart-row-price">₹{item.price * item.quantity}</span>
+              <span className="cart-row-price">₹{item.price * item.quantity * (item.mealService === 'both' ? 2 : 1)}</span>
               <button type="button" className="btn-remove" onClick={() => removeItem(item.key)}>✕</button>
             </div>
           ))}

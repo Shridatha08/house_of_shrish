@@ -49,6 +49,7 @@ export default function Menu() {
   const [error, setError] = useState('');
   const [storeConfig, setStoreConfig] = useState({ announcement: '', orderingPaused: false });
   const [selectedCustomisation, setSelectedCustomisation] = useState({}); // { [menuItemId]: customisation }
+  const [selectedMealService, setSelectedMealService] = useState({});
   const [selectedPlanId, setSelectedPlanId] = useState(null);
   const [clock, setClock] = useState(() => Date.now());
   const { items, addItem, decreaseItem, total, count, makeKey } = useCart();
@@ -63,19 +64,31 @@ export default function Menu() {
     return () => clearInterval(timer);
   }, []);
 
-  function availableService() {
+  function availableSingleMealServices() {
     const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(clock));
     const current = `${parts.find((part) => part.type === 'hour').value}:${parts.find((part) => part.type === 'minute').value}`;
-    if (current < (storeConfig.lunchCutoffTime || '11:00')) return 'Lunch';
-    if (current < (storeConfig.dinnerCutoffTime || '18:00')) return 'Dinner';
-    return null;
+    const lunchOpen = current < (storeConfig.lunchCutoffTime || '11:00');
+    const dinnerOpen = current < (storeConfig.dinnerCutoffTime || '18:00');
+    if (lunchOpen && dinnerOpen) return ['lunch', 'dinner', 'both'];
+    if (lunchOpen) return ['lunch'];
+    if (dinnerOpen) return ['dinner'];
+    return [];
+  }
+
+  function mealServiceFor(item) {
+    const services = availableSingleMealServices();
+    const selected = selectedMealService[item.id];
+    return services.includes(selected) ? selected : services[0];
   }
 
   function cannotAdd(item) {
-    const inCart = items.filter((entry) => entry.id === item.id).reduce((quantity, entry) => quantity + entry.quantity, 0);
+    const inCart = items.filter((entry) => entry.id === item.id).reduce(
+      (quantity, entry) => quantity + entry.quantity * (entry.mealService === 'both' ? 2 : 1),
+      0
+    );
     return storeConfig.orderingPaused || item.available === false ||
       (item.remainingStock != null && inCart >= item.remainingStock) ||
-      (item.name.toLowerCase() === 'single meal' && !availableService()) ||
+      (item.name.toLowerCase() === 'single meal' && !mealServiceFor(item)) ||
       (item.name.toLowerCase().startsWith('monthly') && inCart >= 1);
   }
 
@@ -85,7 +98,8 @@ export default function Menu() {
   }
 
   const quantityOf = (item) => {
-    const key = makeKey(item.id, customisationFor(item));
+    const service = item.name.toLowerCase() === 'single meal' ? mealServiceFor(item) : undefined;
+    const key = makeKey(item.id, customisationFor(item), service);
     return items.find((i) => i.key === key)?.quantity || 0;
   };
 
@@ -143,7 +157,40 @@ export default function Menu() {
                       <h3>{item.name}</h3>
                     </div>
                     <p className="menu-desc">{item.description}</p>
-                    {item.name.toLowerCase() === 'single meal' && <p className="status-text">{availableService() ? `Order for ${availableService()} · ${availableService() === 'Lunch' ? storeConfig.lunchCutoffTime || '11:00' : storeConfig.dinnerCutoffTime || '18:00'} IST cutoff` : 'Single Meal ordering is closed for today.'}</p>}
+                    {item.name.toLowerCase() === 'single meal' && (
+                      availableSingleMealServices().length === 0
+                        ? <p className="status-text">Single Meal ordering is closed for today.</p>
+                        : (
+                          <div className="customisation-group">
+                            <span className="customisation-label">Choose delivery service</span>
+                            <div className="customisation-options">
+                              {availableSingleMealServices().map((service) => {
+                                const active = mealServiceFor(item) === service;
+                                const cutoff = service === 'lunch'
+                                  ? storeConfig.lunchCutoffTime || '11:00'
+                                  : storeConfig.dinnerCutoffTime || '18:00';
+                                const price = item.price * (service === 'both' ? 2 : 1);
+                                const subtitle = service === 'both'
+                                  ? `₹${price} · two portions, before both cutoffs`
+                                  : `₹${price} · ${cutoff} IST cutoff`;
+                                return (
+                                  <button
+                                    key={service}
+                                    type="button"
+                                    className={active ? 'customisation-pill active' : 'customisation-pill'}
+                                    onClick={() => setSelectedMealService((prev) => ({ ...prev, [item.id]: service }))}
+                                  >
+                                    <span className="customisation-pill-title">
+                                      {service === 'both' ? 'Lunch + Dinner' : service[0].toUpperCase() + service.slice(1)}
+                                    </span>
+                                    <span className="customisation-pill-desc">{subtitle}</span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )
+                    )}
                     {item.variants?.length > 0 ? (
                       <p className="menu-price">₹{Math.min(...item.variants.map((variant) => variant.price))} - ₹{Math.max(...item.variants.map((variant) => variant.price))}</p>
                     ) : <p className="menu-price">₹{item.price}</p>}
@@ -160,12 +207,16 @@ export default function Menu() {
                   </div>
                   <div className="menu-card-actions">
                     {item.available === false ? <span className="status-text">Unavailable</span> : quantityOf(item) === 0 ? (
-                      <button className="btn-add" disabled={cannotAdd(item)} onClick={() => addItem(item, customisationFor(item))}>Add</button>
+                      <button className="btn-add" disabled={cannotAdd(item)} onClick={() => addItem(item, customisationFor(item), item.name.toLowerCase() === 'single meal' ? mealServiceFor(item) : undefined)}>Add</button>
                     ) : (
                       <div className="qty-control">
-                        <button onClick={() => decreaseItem(makeKey(item.id, customisationFor(item)))}>−</button>
+                        <button onClick={() => decreaseItem(makeKey(
+                          item.id,
+                          customisationFor(item),
+                          item.name.toLowerCase() === 'single meal' ? mealServiceFor(item) : undefined
+                        ))}>−</button>
                         <span>{quantityOf(item)}</span>
-                        <button disabled={cannotAdd(item)} onClick={() => addItem(item, customisationFor(item))}>+</button>
+                        <button disabled={cannotAdd(item)} onClick={() => addItem(item, customisationFor(item), item.name.toLowerCase() === 'single meal' ? mealServiceFor(item) : undefined)}>+</button>
                       </div>
                     )}
                   </div>

@@ -53,7 +53,7 @@ export default function Invoice() {
             <p><strong>Order No:</strong> #{invoice.orderNumber}</p>
             {invoice.placeOfSupply && <p><strong>Place of Supply:</strong> {invoice.placeOfSupply}</p>}
             <p><strong>Status:</strong> {invoice.status?.replaceAll('_', ' ')}</p>
-            {invoice.scheduledDate && <p><strong>Delivery:</strong> {invoice.scheduledDate} · {invoice.timeSlot}</p>}
+            {invoice.scheduledDate && <p><strong>Delivery:</strong> {invoice.scheduledDate} · {invoice.timeSlot === 'both' ? 'Lunch + Dinner' : invoice.timeSlot}</p>}
           </div>
         </div>
 
@@ -82,6 +82,13 @@ export default function Invoice() {
                 <td>
                   {item.name}
                   {item.customisation && <span className="invoice-item-note">{item.customisation}</span>}
+                  {item.mealService && (
+                    <span className="invoice-item-note">
+                      {item.mealService === 'both'
+                        ? 'Lunch + Dinner'
+                        : item.mealService[0].toUpperCase() + item.mealService.slice(1)}
+                    </span>
+                  )}
                 </td>
                 {taxInvoice && <td>{invoice.hsn}</td>}
                 {taxInvoice && <td>{invoice.cgstRate + invoice.sgstRate}%</td>}

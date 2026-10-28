@@ -308,10 +308,10 @@ export default function AdminHolidays() {
   const normalPreparationMeals = orders.filter((order) =>
     order.scheduledDate === subscriptionOrderDate && ['paid', 'preparing', 'out_for_delivery'].includes(order.status)
   ).flatMap((order) => order.items.filter((item) => item.name.toLowerCase() === 'single meal').map((item) => ({
-    ...item, meal: order.mealService || order.timeSlot, orderId: order.id, customer: order.customer
+    ...item, meal: item.mealService || order.mealService || order.timeSlot, orderId: order.id, customer: order.customer
   })));
-  const singleLunchCount = normalPreparationMeals.filter((item) => item.meal === 'lunch').reduce((total, item) => total + item.quantity, 0);
-  const singleDinnerCount = normalPreparationMeals.filter((item) => item.meal === 'dinner').reduce((total, item) => total + item.quantity, 0);
+  const singleLunchCount = normalPreparationMeals.filter((item) => ['lunch', 'both'].includes(item.meal)).reduce((total, item) => total + item.quantity, 0);
+  const singleDinnerCount = normalPreparationMeals.filter((item) => ['dinner', 'both'].includes(item.meal)).reduce((total, item) => total + item.quantity, 0);
 
   async function handleOrderStatus(order, status) {
     setOrdersError('');
@@ -617,10 +617,10 @@ export default function AdminHolidays() {
                   {subscriptionOnly && !['cancelled', 'refund_requested', 'refunded'].includes(order.status) ? approvalLabel : order.status.replaceAll('_', ' ')}
                 </span>
               </div>
-              <p className="subscription-item-name">{order.items.map((item) => `${item.name} × ${item.quantity}`).join(', ')}</p>
+              <p className="subscription-item-name">{order.items.map((item) => `${item.name} × ${item.quantity}${item.mealService ? ` · ${item.mealService === 'both' ? 'Lunch + Dinner' : item.mealService[0].toUpperCase() + item.mealService.slice(1)}` : ''}`).join(', ')}</p>
               {monthlyItems.length > 0 && !subscriptionOnly && <p className="subscription-summary-dates">Monthly package: {approvalLabel}</p>}
               <p className="subscription-summary-dates">
-                ₹{order.total}{!subscriptionOnly && ` · Delivery: ${order.scheduledDate ? `${order.scheduledDate} · ${order.timeSlot}` : 'No scheduled delivery'}`}
+                ₹{order.total}{!subscriptionOnly && ` · Delivery: ${order.scheduledDate ? `${order.scheduledDate} · ${order.timeSlot === 'both' ? 'Lunch + Dinner' : order.timeSlot}` : 'No scheduled delivery'}`}
               </p>
               <p className="subscription-summary-dates">{order.customer.address}</p>
               <p className="subscription-summary-dates">Flat / Door: {order.customer.flatNumber || 'Not provided'} · Pincode: {order.customer.pincode || 'Not provided'}</p>

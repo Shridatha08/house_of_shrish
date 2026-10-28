@@ -344,6 +344,40 @@ test('menu items are reconciled back to the shipped definitions', async () => {
   );
 });
 
+test('the legacy ladoo size and price migrate to the new 100g option', async () => {
+  const adapter = loadAdapter();
+  adapter.raw('menu').set(6, {
+    _id: 6,
+    id: 6,
+    name: 'Dry Fruits Ladoo',
+    description: 'Naturally sweetened with dates, made with premium dry fruits and crafted with care',
+    price: 249,
+    category: 'Artisanal Sweets',
+    image: 'ladoo.png',
+    variants: [
+      { label: '200g', price: 249 },
+      { label: '500g', price: 699 }
+    ]
+  });
+
+  const first = await adapter.getDb();
+  const ladoo = first.data.menu.find((item) => item.id === 6);
+  assert.equal(ladoo.price, 129);
+  assert.deepEqual(
+    Array.from(ladoo.variants, (variant) => `${variant.label}:${variant.price}`),
+    ['100g:129', '500g:699']
+  );
+
+  const second = await adapter.getDb();
+  assert.deepEqual(
+    Array.from(
+      second.data.menu.find((item) => item.id === 6).variants,
+      (variant) => `${variant.label}:${variant.price}`
+    ),
+    ['100g:129', '500g:699']
+  );
+});
+
 test('collections load in a stable order regardless of storage order', async () => {
   const adapter = loadAdapter();
   await adapter.getDb();

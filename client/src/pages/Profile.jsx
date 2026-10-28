@@ -257,10 +257,10 @@ export default function Profile() {
                 <span className={`subscription-badge ${order.status === 'delivered' ? 'active' : order.status === 'cancelled' || order.status === 'refunded' ? 'expired' : order.status === 'refund_requested' ? 'pending' : 'expiring'}`}>{order.status.replaceAll('_', ' ')}</span>
               </div>
               <p className="subscription-summary-dates">
-                {order.scheduledDate ? `${order.scheduledDate} · ${order.timeSlot} · ` : 'No scheduled delivery · '}{formatRupees(order.total)}
+                {order.scheduledDate ? `${order.scheduledDate} · ${order.timeSlot === 'both' ? 'Lunch + Dinner' : order.timeSlot} · ` : 'No scheduled delivery · '}{formatRupees(order.total)}
               </p>
               <p className="subscription-summary-dates">Payment / delivery status: {orderStatusText(order)}</p>
-              <p className="subscription-summary-dates">{order.items.map((item) => `${item.name} × ${item.quantity}`).join(', ')}</p>
+              <p className="subscription-summary-dates">{order.items.map((item) => `${item.name} × ${item.quantity}${item.mealService ? ` · ${item.mealService === 'both' ? 'Lunch + Dinner' : item.mealService[0].toUpperCase() + item.mealService.slice(1)}` : ''}`).join(', ')}</p>
               <div className="order-actions">
                 {order.status === 'pending_payment' && <Link to={`/payment/${order.id}`} className="btn-link">Continue payment</Link>}
                 {order.status === 'out_for_delivery' && <Link to={`/track/${order.id}`} className="btn-link">Track order</Link>}
