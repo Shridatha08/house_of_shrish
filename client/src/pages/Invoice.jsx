@@ -123,6 +123,12 @@ export default function Invoice() {
               )}
             </>
           )}
+          {invoice.deliveryCharge > 0 && (
+            <div className="invoice-totals-row">
+              <span>Delivery charge</span>
+              <span>₹{money(invoice.deliveryCharge)}</span>
+            </div>
+          )}
           <div className="invoice-totals-row invoice-grand-total">
             <strong>{taxInvoice ? 'Invoice total' : 'Total'}</strong>
             <strong>₹{money(invoice.total)}</strong>

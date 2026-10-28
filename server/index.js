@@ -28,6 +28,7 @@ const YOUPI_ORDER_PREFIX = 'HOS-';
 const KITCHEN_LAT = Number(process.env.KITCHEN_LAT ?? 12.9744129);
 const KITCHEN_LNG = Number(process.env.KITCHEN_LNG ?? 77.6743533);
 const DELIVERY_RADIUS_KM = Number(process.env.DELIVERY_RADIUS_KM ?? 4);
+const LADOO_DELIVERY_CHARGE = 99;
 const OUT_OF_RANGE_MESSAGE = 'Sorry Unavailable in your area. We are working to deliver soon!';
 const ADMIN_KEY = process.env.ADMIN_KEY;
 if (!ADMIN_KEY) throw new Error('ADMIN_KEY environment variable is required.');
@@ -360,9 +361,13 @@ function distanceFromKitchenKm(lat, lng) {
   return 2 * earthRadiusKm * Math.asin(Math.min(1, Math.sqrt(a)));
 }
 
-// Meals are cooked fresh and hand-delivered; sweets ship anywhere.
+// Meals are range-limited; sweets can go beyond the radius, with a fee for ladoos.
 function requiresLocalDelivery(menuItem) {
   return menuItem?.category === 'Pure Veg Meals';
+}
+
+function isDryFruitsLadoo(menuItem) {
+  return menuItem?.name.trim().toLowerCase() === 'dry fruits ladoo';
 }
 
 const SWEETS_DELIVERED = 'Your box of homemade goodness has been delivered! Enjoy the rich, healthy crunch.';
@@ -1634,6 +1639,7 @@ app.get('/api/store-config', async (req, res) => {
     kitchenLat: KITCHEN_LAT,
     kitchenLng: KITCHEN_LNG,
     deliveryRadiusKm: DELIVERY_RADIUS_KM,
+    ladooDeliveryCharge: LADOO_DELIVERY_CHARGE,
     onlinePayment: YOUPI_ENABLED
   });
 });
@@ -2328,17 +2334,25 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
   if (settings.kitchenClosedDates.includes(today)) return res.status(409).json({ error: 'The kitchen is closed today.' });
   const menuById = new Map(db.data.menu.map((item) => [item.id, item]));
 
-  // Meals are delivered from the kitchen, so they are limited by distance.
-  // Sweets are not, and a sweets-only order needs no pin at all.
+  // Meals are limited by distance; ladoos need a pin to calculate any
+  // applicable delivery charge. Other sweets can still be ordered without one.
   const needsLocalDelivery = items.some((line) => requiresLocalDelivery(menuById.get(Number(line.id))));
-  if (needsLocalDelivery) {
+  const hasDryFruitsLadoo = items.some((line) => isDryFruitsLadoo(menuById.get(Number(line.id))));
+  let outsideDeliveryRadius = false;
+  if (needsLocalDelivery || hasDryFruitsLadoo) {
     if (customer.lat == null || customer.lng == null) {
-      return res.status(400).json({ error: 'Pin your delivery location on the map to order meals.' });
+      return res.status(400).json({
+        error: needsLocalDelivery
+          ? 'Pin your delivery location on the map to order meals.'
+          : 'Pin your delivery location on the map to calculate the Dry Fruits Ladoo delivery charge.'
+      });
     }
-    if (distanceFromKitchenKm(customer.lat, customer.lng) > DELIVERY_RADIUS_KM) {
+    outsideDeliveryRadius = distanceFromKitchenKm(customer.lat, customer.lng) > DELIVERY_RADIUS_KM;
+    if (needsLocalDelivery && outsideDeliveryRadius) {
       return res.status(409).json({ error: OUT_OF_RANGE_MESSAGE });
     }
   }
+  const deliveryCharge = hasDryFruitsLadoo && outsideDeliveryRadius ? LADOO_DELIVERY_CHARGE : 0;
   const cutoffExempt = items.every((line) => {
     const menuItem = menuById.get(Number(line.id));
     return menuItem && (menuItem.name.toLowerCase().startsWith('monthly') || menuItem.id === 6);
@@ -2462,7 +2476,7 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
 
   const tax = gstBreakdown(total);
   // The bill including GST, before any wallet credit is applied.
-  const subtotal = tax.total;
+  const subtotal = tax.total + deliveryCharge;
   total = subtotal;
   let walletApplied = 0;
   if (useWallet && user) {
@@ -2480,6 +2494,7 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
     sgstRate: SGST_RATE,
     sgst: tax.sgst,
     roundOff: tax.roundOff,
+    deliveryCharge,
     subtotal,
     walletApplied,
     total,
@@ -2839,6 +2854,7 @@ app.get('/api/orders/:id/invoice', async (req, res) => {
     items,
     walletApplied: Number(order.walletApplied || 0),
     amountPaid: Number(order.total),
+    deliveryCharge: Number(order.deliveryCharge || 0),
     total: invoiceTotal
   };
 

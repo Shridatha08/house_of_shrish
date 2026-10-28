@@ -8,6 +8,7 @@ import { deadlineMessage, deadlineRisk, daysUntilDeadline, etaText, RISK } from 
 import { statusOf, skipAvailability, scheduleByDate, upcomingTotals, planSummary, formatMealDate, withinDays } from '../src/schedule.js';
 import { feedbackError, thanksFor } from '../src/feedback.js';
 import { formatCountdown, isPaymentUrgent, orderStatusText, paymentWindowClosed, timeLeftToPay, PAYMENT_WINDOW_MS } from '../src/paymentWindow.js';
+import { dryFruitsLadooDeliveryCharge } from '../src/delivery.js';
 
 const subWith = (overrides = {}) => ({
   carryForwardDeadline: '2026-11-20',
@@ -303,6 +304,23 @@ test('GST is 2.5% CGST plus 2.5% SGST on top of the meal price, as the server ch
 test('wallet credit off a GST total has no float noise', () => {
   assert.deepEqual(walletSplit({ total: 313.96, balance: 50, useWallet: true }), { credit: 50, payable: 263.96 });
   assert.deepEqual(walletSplit({ total: 135.46, balance: 100.1, useWallet: true }), { credit: 100.1, payable: 35.36 });
+});
+
+test('only dry fruits ladoo orders beyond the radius get the delivery charge', () => {
+  const config = {
+    kitchenLat: 12.9744129,
+    kitchenLng: 77.6743533,
+    deliveryRadiusKm: 4,
+    ladooDeliveryCharge: 99
+  };
+  const ladoo = [{ name: 'Dry Fruits Ladoo' }];
+  const nearby = { lat: 12.9744, lng: 77.6743 };
+  const farAway = { lat: 12.9716, lng: 77.5946 };
+
+  assert.equal(dryFruitsLadooDeliveryCharge(ladoo, nearby, config), 0);
+  assert.equal(dryFruitsLadooDeliveryCharge(ladoo, farAway, config), 99);
+  assert.equal(dryFruitsLadooDeliveryCharge(ladoo, null, config), 0);
+  assert.equal(dryFruitsLadooDeliveryCharge([{ name: 'Other Sweet' }], farAway, config), 0);
 });
 
 test('rupee amounts show paise only when there are any', () => {

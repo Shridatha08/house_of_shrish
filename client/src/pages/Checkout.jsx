@@ -3,10 +3,18 @@ import { Link, useNavigate } from 'react-router-dom';
 import BackToMenu from '../components/BackToMenu';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
-import { placeOrder, getWallet } from '../api';
+import { placeOrder, getWallet, getStoreConfig } from '../api';
 import { walletSplit } from '../wallet';
 import { CGST_RATE, SGST_RATE, formatRupees, gstBreakdown } from '../gst';
 import LocationPicker from '../components/LocationPicker';
+import { dryFruitsLadooDeliveryCharge } from '../delivery';
+
+const DEFAULT_DELIVERY_CONFIG = {
+  kitchenLat: 12.9744129,
+  kitchenLng: 77.6743533,
+  deliveryRadiusKm: 4,
+  ladooDeliveryCharge: 99
+};
 
 function todayIST() {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -33,6 +41,9 @@ export default function Checkout() {
   const [alternateDelivery, setAlternateDelivery] = useState(false);
   const [walletBalance, setWalletBalance] = useState(0);
   const [useWallet, setUseWallet] = useState(false);
+  const [storeConfig, setStoreConfig] = useState(DEFAULT_DELIVERY_CONFIG);
+  const [storeConfigLoaded, setStoreConfigLoaded] = useState(false);
+  const [storeConfigError, setStoreConfigError] = useState('');
 
   useEffect(() => {
     if (!token) return;
@@ -43,8 +54,22 @@ export default function Checkout() {
     return () => { cancelled = true; };
   }, [token]);
 
+  useEffect(() => {
+    let cancelled = false;
+    getStoreConfig()
+      .then((config) => { if (!cancelled) setStoreConfig(config); })
+      .catch(() => {
+        if (!cancelled) setStoreConfigError('Could not load delivery settings. Please refresh and try again.');
+      })
+      .finally(() => { if (!cancelled) setStoreConfigLoaded(true); });
+    return () => { cancelled = true; };
+  }, []);
+
   const tax = gstBreakdown(total);
-  const split = walletSplit({ total: tax.total, balance: walletBalance, useWallet });
+  const hasDryFruitsLadoo = items.some((item) => item.name.trim().toLowerCase() === 'dry fruits ladoo');
+  const deliveryCharge = dryFruitsLadooDeliveryCharge(items, position, storeConfig);
+  const totalWithDelivery = tax.total + deliveryCharge;
+  const split = walletSplit({ total: totalWithDelivery, balance: walletBalance, useWallet });
 
   const requiresAccount = items.some((i) => i.name.toLowerCase().startsWith('monthly'));
   const blockedByAuth = requiresAccount && !user;
@@ -57,6 +82,11 @@ export default function Checkout() {
       setAddress(user.address || '');
       setFlatNumber(user.flatNumber || '');
       setPincode(user.pincode || '');
+      setPosition(
+        Number.isFinite(user.lat) && Number.isFinite(user.lng)
+          ? { lat: user.lat, lng: user.lng }
+          : null
+      );
     }
   }, [user, alternateDelivery]);
 
@@ -87,6 +117,14 @@ export default function Checkout() {
     }
     if (requiresAccount && (!subscriptionStartDate || subscriptionStartDate < todayIST())) {
       setError('Choose a subscription start date from today onward.');
+      return;
+    }
+    if (hasDryFruitsLadoo && !storeConfigLoaded) {
+      setError(storeConfigError || 'Delivery settings are still loading. Please try again.');
+      return;
+    }
+    if (hasDryFruitsLadoo && !position) {
+      setError('Pin your delivery location to calculate the Dry Fruits Ladoo delivery charge.');
       return;
     }
     if (!/^\d{10}$/.test(phone.trim())) {
@@ -163,7 +201,7 @@ export default function Checkout() {
           ))}
           <div className="cart-bill">
             <div className="cart-bill-row">
-              <span>Meal price (before tax)</span>
+              <span>Item price (before tax)</span>
               <span>{formatRupees(tax.taxableValue)}</span>
             </div>
             <div className="cart-bill-row">
@@ -180,10 +218,16 @@ export default function Checkout() {
                 <span>+{formatRupees(tax.roundOff)}</span>
               </div>
             )}
+            {hasDryFruitsLadoo && position && (
+              <div className="cart-bill-row">
+                <span>Delivery charge</span>
+                <span>{formatRupees(deliveryCharge)}</span>
+              </div>
+            )}
           </div>
           <div className="cart-total-row">
             <strong>Total</strong>
-            <strong>{formatRupees(tax.total)}</strong>
+            <strong>{formatRupees(totalWithDelivery)}</strong>
           </div>
           {walletBalance > 0 && (
             <div className="wallet-apply">
@@ -254,6 +298,14 @@ export default function Checkout() {
         )}
         <div className="location-section">
           <span className="location-header">Pin your location</span>
+          {hasDryFruitsLadoo && (
+            <p className="status-text">
+              Dry Fruits Ladoo orders beyond {storeConfig.deliveryRadiusKm} km incur a {formatRupees(storeConfig.ladooDeliveryCharge)} delivery charge.
+            </p>
+          )}
+          {hasDryFruitsLadoo && storeConfigError && (
+            <p className="status-text error">{storeConfigError}</p>
+          )}
           <LocationPicker
             position={position}
             onChange={setPosition}
@@ -266,7 +318,11 @@ export default function Checkout() {
 
         {error && <p className="status-text error">{error}</p>}
 
-        <button className="btn-primary" type="submit" disabled={submitting || items.length === 0 || blockedByAuth}>
+        <button
+          className="btn-primary"
+          type="submit"
+          disabled={submitting || items.length === 0 || blockedByAuth || (hasDryFruitsLadoo && (!storeConfigLoaded || !!storeConfigError))}
+        >
           {submitting ? 'Placing order…' : `Place order · ${formatRupees(split.payable)}`}
         </button>
       </form>

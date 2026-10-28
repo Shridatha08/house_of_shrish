@@ -195,6 +195,7 @@ test('orders charge 2.5% CGST and 2.5% SGST on top of the menu price', async () 
   assert.equal(order.sgstRate, 2.5);
   assert.equal(order.sgst, 3.23);
   assert.equal(order.roundOff, 0.54, 'rounded up to the next rupee');
+  assert.equal(order.deliveryCharge, 0);
   assert.equal(order.total, 136);
   assert.equal(order.invoiceNumber, undefined, 'numbered only once paid');
 });
@@ -226,6 +227,7 @@ test('verified orders get a GST tax invoice numbered consecutively per IST day',
   assert.equal(invoice.body.cgst, 3.23);
   assert.equal(invoice.body.sgst, 3.23);
   assert.equal(invoice.body.roundOff, 0.54);
+  assert.equal(invoice.body.deliveryCharge, 0);
   assert.equal(invoice.body.total, 136);
   assert.equal(invoice.body.amountPaid, 136);
   assert.equal((await app.request('get', '/api/orders/:id/invoice', {}, { id: first })).body.invoiceNumber, '10102026_02');
@@ -813,7 +815,7 @@ test('promotional broadcasts validate content and reach only customers', async (
   assert.equal(promo.data.type, 'promotion');
 });
 
-test('meals are limited to the delivery radius; sweets are not', async () => {
+test('meals are range-limited and ladoos add a charge outside the delivery radius', async () => {
   const app = application();
   const nearby = { ...customer, lat: 12.9744, lng: 77.6743 };           // at the kitchen
   const farAway = { ...customer, lat: 12.9716, lng: 77.5946 };          // ~9km away
@@ -826,14 +828,61 @@ test('meals are limited to the delivery radius; sweets are not', async () => {
 
   assert.equal((await app.request('post', '/api/orders', { items: meal, customer: nearby }, {}, {})).code, 201);
 
-  // Sweets ship anywhere, with or without a pin.
-  assert.equal((await app.request('post', '/api/orders', { items: ladoo, customer: farAway }, {}, {})).code, 201);
-  assert.equal((await app.request('post', '/api/orders', { items: ladoo, customer: unpinnedCustomer }, {}, {})).code, 201);
+  const nearbyLadoo = await app.request('post', '/api/orders', { items: ladoo, customer: nearby }, {}, {});
+  assert.equal(nearbyLadoo.code, 201);
+  assert.equal(nearbyLadoo.body.order.deliveryCharge, 0);
+  assert.equal(nearbyLadoo.body.order.total, 136);
+
+  const distantLadoo = await app.request('post', '/api/orders', { items: ladoo, customer: farAway }, {}, {});
+  assert.equal(distantLadoo.code, 201);
+  assert.equal(distantLadoo.body.order.deliveryCharge, 99);
+  assert.equal(distantLadoo.body.order.total, 235);
+  const submitted = await app.request(
+    'patch',
+    '/api/orders/:id/mark-paid',
+    {},
+    { id: distantLadoo.body.order.id },
+    { 'x-order-token': distantLadoo.body.accessToken },
+  );
+  assert.equal(submitted.code, 200, JSON.stringify(submitted.body));
+  const verified = await app.request(
+    'patch',
+    '/api/admin/orders/:id/status',
+    { status: 'paid' },
+    { id: distantLadoo.body.order.id },
+    adminHeaders,
+  );
+  assert.equal(verified.code, 200, JSON.stringify(verified.body));
+  const invoice = await app.request(
+    'get',
+    '/api/orders/:id/invoice',
+    {},
+    { id: distantLadoo.body.order.id },
+    { 'x-order-token': distantLadoo.body.accessToken },
+  );
+  assert.equal(invoice.body.deliveryCharge, 99);
+  assert.equal(invoice.body.total, 235);
+
+  const unpinnedLadoo = await app.request('post', '/api/orders', { items: ladoo, customer: unpinnedCustomer }, {}, {});
+  assert.equal(unpinnedLadoo.code, 400);
+  assert.match(unpinnedLadoo.body.error, /Pin your delivery location/);
 
   // A meal without any pin cannot be range-checked, so it is refused.
   const unpinned = await app.request('post', '/api/orders', { items: meal, customer: unpinnedCustomer }, {}, {});
   assert.equal(unpinned.code, 400);
   assert.match(unpinned.body.error, /Pin your delivery location/);
+
+  // Other sweets retain their existing no-pin, no-surcharge behavior.
+  const sweets = fixture();
+  sweets.menu.push({ id: 7, name: 'Other Sweet', category: 'Artisanal Sweets', price: 100 });
+  const sweetsApp = application(sweets);
+  const otherSweet = await sweetsApp.request('post', '/api/orders', {
+    items: [{ id: 7, quantity: 1, customisation: '' }],
+    customer: unpinnedCustomer
+  }, {}, {});
+  assert.equal(otherSweet.code, 201);
+  assert.equal(otherSweet.body.order.deliveryCharge, 0);
+  assert.equal(otherSweet.body.order.total, 105);
 
   // A mixed cart is held to the stricter rule.
   const mixed = await app.request('post', '/api/orders', { items: [...meal, ...ladoo], customer: farAway }, {}, {});
@@ -2449,7 +2498,9 @@ function successPayload(id, overrides = {}) {
 
 test('online payment stays off until the gateway is configured', async () => {
   const app = application();
-  assert.equal((await app.request('get', '/api/store-config')).body.onlinePayment, false);
+  const config = await app.request('get', '/api/store-config');
+  assert.equal(config.body.onlinePayment, false);
+  assert.equal(config.body.ladooDeliveryCharge, 99);
   const created = await purchase(app);
   assert.equal((await app.request('post', '/api/orders/:id/online-payment', {}, { id: created.body.order.id })).code, 404);
   const [raw, headers] = signedWebhook(successPayload(created.body.order.id));
