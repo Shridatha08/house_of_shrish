@@ -1640,6 +1640,7 @@ app.get('/api/store-config', async (req, res) => {
     kitchenLng: KITCHEN_LNG,
     deliveryRadiusKm: DELIVERY_RADIUS_KM,
     ladooDeliveryCharge: LADOO_DELIVERY_CHARGE,
+    singleMealClosedToday: !isWorkingDay(todayISTStr(), subscriptionHolidays(db.data)),
     onlinePayment: YOUPI_ENABLED
   });
 });
@@ -2333,6 +2334,12 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
   const today = todayISTStr();
   if (settings.kitchenClosedDates.includes(today)) return res.status(409).json({ error: 'The kitchen is closed today.' });
   const menuById = new Map(db.data.menu.map((item) => [item.id, item]));
+  const includesSingleMeal = items.some((line) =>
+    menuById.get(Number(line.id))?.name.trim().toLowerCase() === 'single meal'
+  );
+  if (includesSingleMeal && !isWorkingDay(today, subscriptionHolidays(db.data))) {
+    return res.status(409).json({ error: 'Single Meal is unavailable on Sundays and kitchen holidays.' });
+  }
 
   // Meals are limited by distance; ladoos need a pin to calculate any
   // applicable delivery charge. Other sweets can still be ordered without one.

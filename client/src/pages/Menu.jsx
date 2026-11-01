@@ -48,7 +48,11 @@ export default function Menu() {
   const [menu, setMenu] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [storeConfig, setStoreConfig] = useState({ announcement: '', orderingPaused: false });
+  const [storeConfig, setStoreConfig] = useState({
+    announcement: '',
+    orderingPaused: false,
+    singleMealClosedToday: true
+  });
   const [selectedCustomisation, setSelectedCustomisation] = useState({}); // { [menuItemId]: customisation }
   const [selectedMealService, setSelectedMealService] = useState({});
   const [selectedPlanId, setSelectedPlanId] = useState(null);
@@ -66,6 +70,7 @@ export default function Menu() {
   }, []);
 
   function availableSingleMealServices() {
+    if (storeConfig.singleMealClosedToday) return [];
     const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(clock));
     const current = `${parts.find((part) => part.type === 'hour').value}:${parts.find((part) => part.type === 'minute').value}`;
     const lunchOpen = current < (storeConfig.lunchCutoffTime || '11:00');
@@ -143,7 +148,13 @@ export default function Menu() {
                     <p className="menu-desc">{item.description}</p>
                     {item.name.toLowerCase() === 'single meal' && (
                       availableSingleMealServices().length === 0
-                        ? <p className="status-text">Single Meal ordering is closed for today.</p>
+                        ? (
+                          <p className="status-text">
+                            {storeConfig.singleMealClosedToday
+                              ? 'Single Meal is unavailable on Sundays and kitchen holidays.'
+                              : 'Single Meal ordering is closed for today.'}
+                          </p>
+                        )
                         : (
                           <div className="customisation-group">
                             <span className="customisation-label">Choose delivery service</span>

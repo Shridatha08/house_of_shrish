@@ -458,6 +458,28 @@ test('Single Meal lunch/dinner cutoffs remain IST while monthly/ladoo can order 
   assert.equal((await purchase(app, 6)).code, 201);
 });
 
+test('Single Meal is unavailable on Sundays and holidays but orderable on other days', async () => {
+  const sunday = application();
+  sunday.clock('2026-10-11T04:00:00Z');
+  assert.equal((await sunday.request('get', '/api/store-config')).body.singleMealClosedToday, true);
+  const sundayOrder = await purchase(sunday);
+  assert.equal(sundayOrder.code, 409);
+  assert.match(sundayOrder.body.error, /Sundays and kitchen holidays/);
+
+  const weekday = application();
+  weekday.clock('2026-10-12T04:00:00Z');
+  assert.equal((await weekday.request('get', '/api/store-config')).body.singleMealClosedToday, false);
+  assert.equal((await purchase(weekday)).code, 201);
+
+  const holiday = application();
+  holiday.state().holidays.push({ id: 1, date: '2026-10-12', name: 'Kitchen holiday' });
+  holiday.clock('2026-10-12T04:00:00Z');
+  assert.equal((await holiday.request('get', '/api/store-config')).body.singleMealClosedToday, true);
+  const holidayOrder = await purchase(holiday);
+  assert.equal(holidayOrder.code, 409);
+  assert.match(holidayOrder.body.error, /Sundays and kitchen holidays/);
+});
+
 test('a combined Single Meal is charged and counted as two portions', async () => {
   const app = application();
   app.clock('2026-10-10T04:00:00Z');
