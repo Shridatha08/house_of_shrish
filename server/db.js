@@ -12,6 +12,9 @@ const defaultData = {
     { id: 2, name: 'Monthly (Lunch)', description: 'Pure Veg Meals', price: 3299, category: 'Pure Veg Meals', image: '', customisations: MEAL_CUSTOMISATIONS },
     { id: 3, name: 'Monthly (Dinner)', description: 'Pure Veg Meals', price: 3299, category: 'Pure Veg Meals', image: '', customisations: MEAL_CUSTOMISATIONS },
     { id: 4, name: 'Monthly (Lunch + Dinner)', description: 'Pure Veg Meals', price: 5499, category: 'Pure Veg Meals', image: '', customisations: MEAL_CUSTOMISATIONS },
+    { id: 7, name: 'Weekly (Lunch)', description: 'Pure Veg Meals', price: 749, category: 'Pure Veg Meals', image: '', customisations: MEAL_CUSTOMISATIONS },
+    { id: 8, name: 'Weekly (Dinner)', description: 'Pure Veg Meals', price: 749, category: 'Pure Veg Meals', image: '', customisations: MEAL_CUSTOMISATIONS },
+    { id: 9, name: 'Weekly (Lunch + Dinner)', description: 'Pure Veg Meals', price: 1499, category: 'Pure Veg Meals', image: '', customisations: MEAL_CUSTOMISATIONS },
     {
       id: 6,
       name: 'Dry Fruits Ladoo',
@@ -190,6 +193,16 @@ function reconcileMenu(menu) {
       existingItem.customisations = structuredClone(menuItem.customisations);
       changed = true;
     }
+  }
+
+  // Weekly packages arrived after launch, so existing databases gain them
+  // here; prices the admin changes later are left alone.
+  for (const id of [7, 8, 9]) {
+    if (menu.some((item) => item.id === id)) continue;
+    const weekly = defaultData.menu.find((item) => item.id === id);
+    const ladooIndex = menu.findIndex((item) => item.id === 6);
+    menu.splice(ladooIndex === -1 ? menu.length : ladooIndex, 0, structuredClone(weekly));
+    changed = true;
   }
 
   const ladoo = defaultData.menu.find((item) => item.id === 6);

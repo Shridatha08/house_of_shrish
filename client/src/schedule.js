@@ -1,3 +1,5 @@
+import { isSkippable } from './mealPlans.js';
+
 // The skip cutoffs the server enforces in canCancelSubscriptionMeal. They are
 // deliberately not read from store settings: those are the *ordering* cutoffs,
 // and a customer told the wrong time would hit a refusal they cannot explain.
@@ -40,6 +42,8 @@ function formatCutoff(hhmm) {
 // mystery.
 export function skipAvailability(entry) {
   if (!entry || entry.status !== 'upcoming') return { canSkip: false, reason: '' };
+  // Weekly packages cannot be skipped at all, so there is no cutoff to explain.
+  if (entry.skippable === false) return { canSkip: false, reason: '' };
   if (entry.canCancel) return { canSkip: true, reason: '' };
   const cutoff = SKIP_CUTOFFS[entry.meal];
   return {
@@ -75,7 +79,8 @@ export function scheduleByDate(subscriptions, monthKey) {
       (byDate[entry.date] ||= []).push({
         ...entry,
         subscriptionId: subscription.id,
-        subscriptionName: subscription.itemName
+        subscriptionName: subscription.itemName,
+        skippable: isSkippable(subscription)
       });
     }
   }

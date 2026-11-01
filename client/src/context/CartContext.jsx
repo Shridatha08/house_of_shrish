@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { isMealPackage } from '../mealPlans';
 
 const CartContext = createContext(null);
 
@@ -25,7 +26,7 @@ export function CartProvider({ children }) {
     const variant = menuItem.variants?.find((option) => option.label === customisation);
     const price = variant?.price ?? menuItem.price;
     setItems((prev) => {
-      if (menuItem.name.toLowerCase().startsWith('monthly') && prev.some((item) => item.id === menuItem.id)) return prev;
+      if (isMealPackage(menuItem) && prev.some((item) => item.id === menuItem.id)) return prev;
       const existing = prev.find((i) => i.key === key);
       if (existing) {
         return prev.map((i) =>

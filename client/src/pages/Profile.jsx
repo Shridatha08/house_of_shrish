@@ -8,6 +8,7 @@ import FaqPanel from '../components/FaqPanel';
 import Icon from '../components/Icon';
 import DeadlineWarning from '../components/DeadlineWarning';
 import MealPlanPanel from '../components/MealPlanPanel';
+import { isSkippable, planName } from '../mealPlans';
 import FeedbackPanel from '../components/FeedbackPanel';
 import { formatMealDate, mealLabel, mealKey, planSummary } from '../schedule';
 import { orderStatusText } from '../paymentWindow';
@@ -222,13 +223,14 @@ export default function Profile() {
         >
           {subscriptionsError && <p className="status-text error">Subscriptions: {subscriptionsError}</p>}
           {subscriptions.length === 0 && !subscriptionsError && (
-            <p className="status-text">No meal plan yet. A monthly plan appears here once your payment is verified.</p>
+            <p className="status-text">No meal plan yet. A weekly or monthly plan appears here once your payment is verified.</p>
           )}
           {subscriptions.length > 0 && (<>
             {subscriptions.map((sub) => (
               <div key={sub.id} className="subscription-summary-card">
                 <div className="subscription-summary-header">
                   <strong>{sub.itemName}</strong>
+                  <span className="subscription-badge plan">{planName(sub)}</span>
                   <span
                     className={
                       sub.expired
@@ -246,6 +248,7 @@ export default function Profile() {
                 </p>
                 {sub.carryForwardDeadline && <p className="subscription-summary-dates">Carry-forward deadline: {formatMealDate(sub.carryForwardDeadline)}</p>}
                 <DeadlineWarning subscription={sub} />
+                {!isSkippable(sub) && <p className="subscription-summary-dates">Weekly plan · Monday to Friday · meals cannot be skipped</p>}
                 {!sub.expired && (
                   <p className="subscription-days-remaining">
                     {sub.daysRemaining === 0 ? 'Ends today' : `${sub.daysRemaining} day${sub.daysRemaining === 1 ? '' : 's'} remaining`}

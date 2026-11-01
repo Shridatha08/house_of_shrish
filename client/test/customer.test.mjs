@@ -9,6 +9,7 @@ import { statusOf, skipAvailability, scheduleByDate, upcomingTotals, planSummary
 import { feedbackError, thanksFor } from '../src/feedback.js';
 import { formatCountdown, isPaymentUrgent, orderStatusText, paymentWindowClosed, timeLeftToPay, PAYMENT_WINDOW_MS } from '../src/paymentWindow.js';
 import { dryFruitsLadooDeliveryCharge } from '../src/delivery.js';
+import { isMealPackage, isMonday, isMonthlyPlan, isSkippable, isWeeklyPlan, istToday, nextMonday, planName, subscriptionPlan } from '../src/mealPlans.js';
 
 const subWith = (overrides = {}) => ({
   carryForwardDeadline: '2026-11-20',
@@ -342,4 +343,49 @@ test('payment mode names how the invoice was settled', () => {
   assert.equal(paymentMode({ walletApplied: 0, amountPaid: 314 }), 'UPI');
   assert.equal(paymentMode({ walletApplied: 50, amountPaid: 264 }), 'Wallet + UPI');
   assert.equal(paymentMode({ walletApplied: 314, amountPaid: 0 }), 'Wallet');
+});
+
+test('meal packages are recognised by name prefix', () => {
+  assert.equal(isWeeklyPlan({ name: 'Weekly (Lunch)' }), true);
+  assert.equal(isWeeklyPlan('WEEKLY (Dinner)'), true);
+  assert.equal(isWeeklyPlan({ name: 'Monthly (Lunch)' }), false);
+  assert.equal(isMonthlyPlan({ name: 'monthly (Lunch + Dinner)' }), true);
+  assert.equal(isMealPackage({ name: 'Weekly (Lunch + Dinner)' }), true);
+  assert.equal(isMealPackage({ name: 'Single Meal' }), false);
+  assert.equal(isMealPackage(null), false);
+});
+
+test('subscriptions report their plan and whether they can be skipped', () => {
+  assert.equal(subscriptionPlan({ plan: 'weekly', itemName: 'Monthly (Lunch)' }), 'weekly');
+  assert.equal(subscriptionPlan({ itemName: 'Weekly (Dinner)' }), 'weekly');
+  assert.equal(subscriptionPlan({ itemName: 'Monthly (Dinner)' }), 'monthly');
+  assert.equal(planName({ plan: 'weekly' }), 'Weekly');
+  assert.equal(planName({ plan: 'monthly' }), 'Monthly');
+  assert.equal(isSkippable({ plan: 'monthly', skippable: true }), true);
+  assert.equal(isSkippable({ plan: 'monthly', skippable: false }), false);
+  assert.equal(isSkippable({ itemName: 'Weekly (Lunch)' }), false);
+  assert.equal(isSkippable({ itemName: 'Monthly (Lunch)' }), true);
+});
+
+test('weekly packages start on the next Monday', () => {
+  assert.equal(isMonday('2026-11-02'), true);
+  assert.equal(isMonday('2026-11-01'), false);
+  assert.equal(isMonday('2026-02-30'), false);
+  assert.equal(isMonday(''), false);
+  assert.equal(nextMonday('2026-11-02'), '2026-11-02');
+  assert.equal(nextMonday('2026-11-01'), '2026-11-02');
+  assert.equal(nextMonday('2026-11-03'), '2026-11-09');
+  assert.equal(nextMonday('2026-12-29'), '2027-01-04');
+  assert.equal(nextMonday('nope'), '');
+  assert.equal(istToday(new Date('2026-11-01T19:00:00Z')), '2026-11-02');
+});
+
+test('weekly meals never offer a skip or a cutoff reason', () => {
+  const subscriptions = [{
+    id: 'w1', itemName: 'Weekly (Lunch)', plan: 'weekly', skippable: false,
+    schedule: [{ date: '2026-11-02', meal: 'lunch', status: 'upcoming', canCancel: false }]
+  }];
+  const [entry] = scheduleByDate(subscriptions)['2026-11-02'];
+  assert.equal(entry.skippable, false);
+  assert.deepEqual(skipAvailability(entry), { canSkip: false, reason: '' });
 });

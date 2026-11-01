@@ -8,6 +8,7 @@ import { walletSplit } from '../wallet';
 import { CGST_RATE, SGST_RATE, formatRupees, gstBreakdown } from '../gst';
 import LocationPicker from '../components/LocationPicker';
 import { dryFruitsLadooDeliveryCharge } from '../delivery';
+import { WEEKLY_START_MESSAGE, isMealPackage, isMonday, isWeeklyPlan, nextMonday } from '../mealPlans';
 
 const DEFAULT_DELIVERY_CONFIG = {
   kitchenLat: 12.9744129,
@@ -35,7 +36,7 @@ export default function Checkout() {
   const [flatNumber, setFlatNumber] = useState('');
   const [pincode, setPincode] = useState('');
   const [position, setPosition] = useState(null);
-  const [subscriptionStartDate, setSubscriptionStartDate] = useState(todayIST);
+  const [chosenStartDate, setChosenStartDate] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [alternateDelivery, setAlternateDelivery] = useState(false);
@@ -71,7 +72,11 @@ export default function Checkout() {
   const totalWithDelivery = tax.total + deliveryCharge;
   const split = walletSplit({ total: totalWithDelivery, balance: walletBalance, useWallet });
 
-  const requiresAccount = items.some((i) => i.name.toLowerCase().startsWith('monthly'));
+  const requiresAccount = items.some(isMealPackage);
+  const hasWeeklyPlan = items.some(isWeeklyPlan);
+  // Weekly packages must start on a Monday, so the default moves onto one.
+  const earliestStartDate = hasWeeklyPlan ? nextMonday(todayIST()) : todayIST();
+  const subscriptionStartDate = chosenStartDate || earliestStartDate;
   const blockedByAuth = requiresAccount && !user;
 
   // Prefill delivery details from the saved profile for logged-in users.
@@ -112,11 +117,15 @@ export default function Checkout() {
       return;
     }
     if (blockedByAuth) {
-      setError('Please sign up or log in to order Monthly packages.');
+      setError('Please sign up or log in to order meal packages.');
       return;
     }
     if (requiresAccount && (!subscriptionStartDate || subscriptionStartDate < todayIST())) {
       setError('Choose a subscription start date from today onward.');
+      return;
+    }
+    if (hasWeeklyPlan && !isMonday(subscriptionStartDate)) {
+      setError(WEEKLY_START_MESSAGE);
       return;
     }
     if (hasDryFruitsLadoo && !storeConfigLoaded) {
@@ -253,7 +262,7 @@ export default function Checkout() {
       <h2>Delivery Details</h2>
       {blockedByAuth && (
         <p className="auth-required-notice">
-          Monthly packages require an account. <Link to="/login?redirect=/checkout">Sign up or log in</Link> to continue.
+          Meal packages require an account. <Link to="/login?redirect=/checkout">Sign up or log in</Link> to continue.
         </p>
       )}
       <form className="checkout-form" onSubmit={handleSubmit}>
@@ -293,7 +302,19 @@ export default function Checkout() {
         {requiresAccount && (
           <label>
             Preferred subscription start date (IST)
-            <input type="date" value={subscriptionStartDate} min={todayIST()} onChange={(event) => setSubscriptionStartDate(event.target.value)} required />
+            <input
+              type="date"
+              value={subscriptionStartDate}
+              min={earliestStartDate}
+              step={hasWeeklyPlan ? 7 : undefined}
+              onChange={(event) => setChosenStartDate(event.target.value)}
+              required
+            />
+            {hasWeeklyPlan && (
+              <span className={isMonday(subscriptionStartDate) ? 'status-text' : 'status-text error'}>
+                Weekly packages start on a Monday.
+              </span>
+            )}
           </label>
         )}
         <div className="location-section">

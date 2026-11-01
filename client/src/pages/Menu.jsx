@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { getMenu, getStoreConfig } from '../api';
 import { useCart } from '../context/CartContext';
 import PromoMarquee from '../components/PromoMarquee';
+import { isMealPackage, isMonthlyPlan, isWeeklyPlan } from '../mealPlans';
 import fssaiLogo from '../../../fssai.png';
 import mealsImg from '../../../meals.png';
 import ladooImg from '../../../ladoo.png';
@@ -16,7 +17,7 @@ const CATEGORY_BANNERS = {
   'Artisanal Sweets': ladooImg
 };
 
-// Extracts the "Lunch" / "Dinner" / "Lunch + Dinner" part from a name like "Monthly (Lunch)".
+// Extracts the "Lunch" / "Dinner" / "Lunch + Dinner" part from a name like "Monthly (Lunch)" or "Weekly (Dinner)".
 function planLabel(name) {
   const match = name.match(/\(([^)]+)\)/);
   return match ? match[1] : name;
@@ -56,6 +57,7 @@ export default function Menu() {
   const [selectedCustomisation, setSelectedCustomisation] = useState({}); // { [menuItemId]: customisation }
   const [selectedMealService, setSelectedMealService] = useState({});
   const [selectedPlanId, setSelectedPlanId] = useState(null);
+  const [selectedWeeklyPlanId, setSelectedWeeklyPlanId] = useState(null);
   const [clock, setClock] = useState(() => Date.now());
   const { items, addItem, decreaseItem, total, count, makeKey } = useCart();
 
@@ -95,7 +97,7 @@ export default function Menu() {
     return storeConfig.orderingPaused || item.available === false ||
       (item.remainingStock != null && inCart >= item.remainingStock) ||
       (item.name.toLowerCase() === 'single meal' && !mealServiceFor(item)) ||
-      (item.name.toLowerCase().startsWith('monthly') && inCart >= 1);
+      (isMealPackage(item) && inCart >= 1);
   }
 
   function customisationFor(item) {
@@ -108,6 +110,67 @@ export default function Menu() {
     const key = makeKey(item.id, customisationFor(item), service);
     return items.find((i) => i.key === key)?.quantity || 0;
   };
+
+  function renderPackageCard({ plans, selectedId, onSelectPlan, title, description, note, unit }) {
+    const selectedPlan = plans.find((p) => p.id === selectedId) || plans[0];
+    if (!selectedPlan) return null;
+    return (
+      <div className="menu-card monthly-package-card">
+        <div className="menu-card-body">
+          <div className="menu-card-heading">
+            <span className="veg-badge" title="Pure Veg" />
+            <h3>{title}</h3>
+          </div>
+          <p className="menu-desc">{description}</p>
+          {note && <p className="menu-desc package-note">{note}</p>}
+
+          <div className="customisation-group">
+            <span className="customisation-label">Step 1 · Choose a plan</span>
+            <div className="customisation-options">
+              {plans.map((plan) => (
+                <button
+                  key={plan.id}
+                  type="button"
+                  className={plan.id === selectedPlan.id ? 'customisation-pill active' : 'customisation-pill'}
+                  onClick={() => onSelectPlan(plan.id)}
+                >
+                  <span className="customisation-pill-title">{planLabel(plan.name)}</span>
+                  <span className="customisation-pill-desc">₹{plan.price} / {unit}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {selectedPlan.customisations?.length > 0 && (
+            <div className="step-2">
+              <span className="customisation-label">Step 2 · Choose your meal</span>
+              <CustomisationPicker
+                item={selectedPlan}
+                selected={customisationFor(selectedPlan)}
+                hideLabel
+                onSelect={(option) =>
+                  setSelectedCustomisation((prev) => ({ ...prev, [selectedPlan.id]: option }))
+                }
+              />
+            </div>
+          )}
+
+          <p className="menu-price">₹{selectedPlan.price}{unit === 'week' ? ' / week' : ''}</p>
+        </div>
+        <div className="menu-card-actions">
+          {selectedPlan.available === false ? <span className="status-text">Unavailable</span> : quantityOf(selectedPlan) === 0 ? (
+            <button className="btn-add" disabled={cannotAdd(selectedPlan)} onClick={() => addItem(selectedPlan, customisationFor(selectedPlan))}>Add</button>
+          ) : (
+            <div className="qty-control">
+              <button onClick={() => decreaseItem(makeKey(selectedPlan.id, customisationFor(selectedPlan)))}>−</button>
+              <span>{quantityOf(selectedPlan)}</span>
+              <button disabled={cannotAdd(selectedPlan)} onClick={() => addItem(selectedPlan, customisationFor(selectedPlan))}>+</button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   if (loading) return <p className="status-text">Loading menu…</p>;
   if (error) return <p className="status-text error">{error}</p>;
@@ -123,9 +186,9 @@ export default function Menu() {
 
       {categories.map((category) => {
         const categoryItems = menu.filter((item) => item.category === category);
-        const monthlyPlans = categoryItems.filter((item) => item.name.toLowerCase().startsWith('monthly'));
-        const regularItems = categoryItems.filter((item) => !item.name.toLowerCase().startsWith('monthly'));
-        const selectedPlan = monthlyPlans.find((p) => p.id === selectedPlanId) || monthlyPlans[0];
+        const monthlyPlans = categoryItems.filter(isMonthlyPlan);
+        const weeklyPlans = categoryItems.filter(isWeeklyPlan);
+        const regularItems = categoryItems.filter((item) => !isMealPackage(item));
 
         return (
           <section key={category} className="menu-category">
@@ -218,61 +281,24 @@ export default function Menu() {
                 </div>
               ))}
 
-              {selectedPlan && (
-                <div className="menu-card monthly-package-card">
-                  <div className="menu-card-body">
-                    <div className="menu-card-heading">
-                      <span className="veg-badge" title="Pure Veg" />
-                      <h3>Monthly Package</h3>
-                    </div>
-                    <p className="menu-desc">Choose Lunch, Dinner, or both for the whole month.</p>
+              {renderPackageCard({
+                plans: monthlyPlans,
+                selectedId: selectedPlanId,
+                onSelectPlan: setSelectedPlanId,
+                title: 'Monthly Package',
+                description: 'Choose Lunch, Dinner, or both for the whole month.',
+                unit: 'month'
+              })}
 
-                    <div className="customisation-group">
-                      <span className="customisation-label">Step 1 · Choose a plan</span>
-                      <div className="customisation-options">
-                        {monthlyPlans.map((plan) => (
-                          <button
-                            key={plan.id}
-                            type="button"
-                            className={plan.id === selectedPlan.id ? 'customisation-pill active' : 'customisation-pill'}
-                            onClick={() => setSelectedPlanId(plan.id)}
-                          >
-                            <span className="customisation-pill-title">{planLabel(plan.name)}</span>
-                            <span className="customisation-pill-desc">₹{plan.price} / month</span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {selectedPlan.customisations?.length > 0 && (
-                      <div className="step-2">
-                        <span className="customisation-label">Step 2 · Choose your meal</span>
-                        <CustomisationPicker
-                          item={selectedPlan}
-                          selected={customisationFor(selectedPlan)}
-                          hideLabel
-                          onSelect={(option) =>
-                            setSelectedCustomisation((prev) => ({ ...prev, [selectedPlan.id]: option }))
-                          }
-                        />
-                      </div>
-                    )}
-
-                    <p className="menu-price">₹{selectedPlan.price}</p>
-                  </div>
-                  <div className="menu-card-actions">
-                    {selectedPlan.available === false ? <span className="status-text">Unavailable</span> : quantityOf(selectedPlan) === 0 ? (
-                      <button className="btn-add" disabled={cannotAdd(selectedPlan)} onClick={() => addItem(selectedPlan, customisationFor(selectedPlan))}>Add</button>
-                    ) : (
-                      <div className="qty-control">
-                        <button onClick={() => decreaseItem(makeKey(selectedPlan.id, customisationFor(selectedPlan)))}>−</button>
-                        <span>{quantityOf(selectedPlan)}</span>
-                        <button disabled={cannotAdd(selectedPlan)} onClick={() => addItem(selectedPlan, customisationFor(selectedPlan))}>+</button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
+              {renderPackageCard({
+                plans: weeklyPlans,
+                selectedId: selectedWeeklyPlanId,
+                onSelectPlan: setSelectedWeeklyPlanId,
+                title: 'Weekly Package',
+                description: 'Choose Lunch, Dinner, or both for a week.',
+                note: '5 days, Monday to Friday · starts on a Monday · no skips',
+                unit: 'week'
+              })}
             </div>
           </section>
         );

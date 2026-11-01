@@ -22,6 +22,8 @@ function fixture() {
       { id: 1, name: 'Single Meal', category: 'Pure Veg Meals', price: 129, customisations: ['Meal A', 'Meal B'] },
       { id: 2, name: 'Monthly (Lunch)', category: 'Pure Veg Meals', price: 3299, customisations: ['Meal A', 'Meal B'] },
       { id: 4, name: 'Monthly (Lunch + Dinner)', category: 'Pure Veg Meals', price: 5499, customisations: ['Meal A', 'Meal B'] },
+      { id: 7, name: 'Weekly (Lunch)', category: 'Pure Veg Meals', price: 749, customisations: ['Meal A', 'Meal B'] },
+      { id: 9, name: 'Weekly (Lunch + Dinner)', category: 'Pure Veg Meals', price: 1499, customisations: ['Meal A', 'Meal B'] },
       { id: 6, name: 'Dry Fruits Ladoo', category: 'Artisanal Sweets', price: 129, variants: [{ label: '100g', price: 129 }, { label: '500g', price: 699 }] }
     ]
   };
@@ -2868,6 +2870,93 @@ test('customer passwords need eight characters with a letter and a number', asyn
   }
   assert.match((await attempt('password')).body.error, /letter and one number/);
   assert.equal((await attempt('ladoo2026')).code, 201);
+});
+
+// The test clock starts on Saturday 2026-10-10, so the next Monday is 10-12.
+async function approvedWeekly(app, itemId = 7, extra = {}) {
+  const created = await purchase(app, itemId, extra);
+  const id = created.body.order.id;
+  await app.request('patch', '/api/orders/:id/mark-paid', {}, { id });
+  await app.request('patch', '/api/admin/orders/:id/status', { status: 'paid' }, { id }, adminHeaders);
+  const subId = app.state().subscriptions.at(-1).id;
+  assert.equal((await app.request('patch', '/api/admin/subscriptions/:id/approve', {}, { id: subId }, adminHeaders)).code, 200);
+  return { created, subId };
+}
+
+test('weekly packages start on a Monday and run Monday to Friday', async () => {
+  const app = application();
+  const tuesday = await purchase(app, 7, { subscriptionStartDate: '2026-10-13' });
+  assert.equal(tuesday.code, 400);
+  assert.match(tuesday.body.error, /Monday/);
+
+  const { created } = await approvedWeekly(app);
+  assert.equal(created.code, 201);
+  assert.equal(created.body.order.items[0].price, 749);
+  const subscription = app.state().subscriptions[0];
+  assert.equal(subscription.startDate, '2026-10-12');
+  assert.equal(subscription.workingDaysRequired, 5);
+
+  const [mine] = (await app.request('get', '/api/subscriptions/me')).body;
+  assert.equal(mine.plan, 'weekly');
+  assert.equal(mine.skippable, false);
+  assert.deepEqual([...mine.schedule.map((entry) => entry.date)], ['2026-10-12', '2026-10-13', '2026-10-14', '2026-10-15', '2026-10-16']);
+  assert.ok(mine.schedule.every((entry) => entry.canCancel === false));
+  assert.equal(mine.endDate, '2026-10-16');
+});
+
+test('a holiday in a weekly package adds the next weekday, skipping Saturday', async () => {
+  const data = fixture();
+  data.holidays = [{ id: 1, date: '2026-10-14', name: 'Festival' }];
+  const app = application(data);
+  await approvedWeekly(app, 9);
+  const [mine] = (await app.request('get', '/api/subscriptions/me')).body;
+  assert.deepEqual([...new Set(mine.schedule.map((entry) => entry.date))], ['2026-10-12', '2026-10-13', '2026-10-15', '2026-10-16', '2026-10-19']);
+  assert.equal(mine.remainingMeals, 10);
+  assert.equal(mine.endDate, '2026-10-19');
+});
+
+test('customers cannot skip weekly meals', async () => {
+  const app = application();
+  const { subId } = await approvedWeekly(app);
+  const single = await app.request('post', '/api/subscriptions/:id/skip', { date: '2026-10-13', meal: 'lunch' }, { id: subId });
+  assert.equal(single.code, 409);
+  assert.match(single.body.error, /cannot be skipped/);
+  const range = await app.request('post', '/api/subscriptions/:id/skip-range', { fromDate: '2026-10-13', toDate: '2026-10-14', meals: ['lunch'] }, { id: subId });
+  assert.equal(range.code, 409);
+  assert.equal(app.state().subscriptions[0].skippedMeals.length, 0);
+});
+
+test('a weekly and a monthly plan cannot cover the same meal', async () => {
+  const app = application();
+  await approvedWeekly(app);
+  const overlap = await purchase(app, 2, { subscriptionStartDate: '2026-10-12' });
+  assert.equal(overlap.code, 409);
+  assert.match(overlap.body.error, /lunch/);
+});
+
+test('admins can add a weekly package only from a Monday', async () => {
+  const app = application();
+  const body = (startDate) => ({ userId: 1, itemId: 9, startDate });
+  assert.equal((await app.request('post', '/api/admin/subscriptions', body('2026-10-14'), {}, adminHeaders)).code, 400);
+  const added = await app.request('post', '/api/admin/subscriptions', body('2026-10-19'), {}, adminHeaders);
+  assert.equal(added.code, 201);
+  assert.equal(added.body.workingDaysRequired, 5);
+  assert.equal(added.body.endDate, '2026-10-23');
+  const moved = (startDate) => app.request('patch', '/api/admin/subscriptions/:id', { startDate }, { id: added.body.id }, adminHeaders);
+  assert.equal((await moved('2026-10-21')).code, 400);
+  assert.equal((await moved('2026-10-26')).code, 200);
+  assert.equal(app.state().subscriptions[0].startDate, '2026-10-26');
+});
+
+test('a late weekly approval moves the start to the next Monday', async () => {
+  const app = application();
+  const created = await purchase(app, 7);
+  const id = created.body.order.id;
+  await app.request('patch', '/api/orders/:id/mark-paid', {}, { id });
+  await app.request('patch', '/api/admin/orders/:id/status', { status: 'paid' }, { id }, adminHeaders);
+  app.clock('2026-10-13T04:00:00Z');
+  await app.request('patch', '/api/admin/subscriptions/:id/approve', {}, { id: app.state().subscriptions[0].id }, adminHeaders);
+  assert.equal(app.state().subscriptions[0].startDate, '2026-10-19');
 });
 
 async function sweep(app) {

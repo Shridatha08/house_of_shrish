@@ -266,6 +266,11 @@
   grid-column: 1 / -1;
 }
 
+.package-note {
+  font-weight: 600;
+  color: #7a4b2a;
+}
+
 .customisation-label {
   font-size: 0.72rem;
   font-weight: 700;
@@ -789,6 +794,15 @@
 .subscription-badge.expired {
   background: #fdecea;
   color: #c0392b;
+}
+
+.subscription-badge.plan {
+  background: #f3ece6;
+  color: #7a4b2a;
+}
+
+.subscription-badge.plan + .subscription-badge {
+  margin-left: 0;
 }
 
 .subscription-badge.pending {

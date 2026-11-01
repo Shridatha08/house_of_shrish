@@ -336,6 +336,11 @@ test('menu items are reconciled back to the shipped definitions', async () => {
   // The legacy fixture carries a stale customisation list.
   assert.ok(first.data.menu.find((item) => item.id === 1).customisations.length > 1);
   assert.ok(first.data.menu.some((item) => item.id === 6), 'missing items are restored');
+  assert.deepEqual(
+    first.data.menu.filter((item) => [7, 8, 9].includes(item.id)).map((item) => [item.name, item.price]),
+    [['Weekly (Lunch)', 749], ['Weekly (Dinner)', 749], ['Weekly (Lunch + Dinner)', 1499]],
+    'weekly packages are added to an existing menu'
+  );
 
   const second = await adapter.getDb();
   assert.deepEqual(

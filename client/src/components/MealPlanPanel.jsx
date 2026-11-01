@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { statusOf, mealLabel, formatMealDate, skipAvailability, mealKey, scheduleByDate, upcomingTotals, withinDays, LEGEND, MEAL_STATUSES } from '../schedule';
+import { isSkippable } from '../mealPlans';
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
@@ -14,12 +15,12 @@ export default function MealPlanPanel({ subscriptions, onSkip, onSkipRange, skip
   const [selectedDate, setSelectedDate] = useState('');
   const [showAll, setShowAll] = useState(false);
   const [rangeSubscriptionId, setRangeSubscriptionId] = useState(
-    () => subscriptions.find((subscription) => subscription.approved)?.id || ''
+    () => subscriptions.find((subscription) => subscription.approved && isSkippable(subscription))?.id || ''
   );
   const [rangeFrom, setRangeFrom] = useState(todayInIndia);
   const [rangeTo, setRangeTo] = useState(todayInIndia);
   const [rangeMeals, setRangeMeals] = useState(
-    () => subscriptions.find((subscription) => subscription.approved)?.mealSlots || []
+    () => subscriptions.find((subscription) => subscription.approved && isSkippable(subscription))?.mealSlots || []
   );
 
   const year = month.getFullYear();
@@ -39,6 +40,7 @@ export default function MealPlanPanel({ subscriptions, onSkip, onSkipRange, skip
   const todayKey = today || new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
   const rangeSubscriptions = subscriptions.filter((subscription) =>
     subscription.approved &&
+    isSkippable(subscription) &&
     Number(subscription.mealsBeyondDeadline || 0) === 0 &&
     (subscription.schedule || []).some((entry) => entry.status === 'upcoming') &&
     (subscription.carryForwardDeadline || subscription.endDate || '') >= todayKey

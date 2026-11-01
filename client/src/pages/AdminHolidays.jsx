@@ -21,6 +21,7 @@ import {
   issueAdminPasswordResetKey,
   addAdminSubscription
 } from '../api';
+import { isMealPackage, isMonday, isSkippable, isWeeklyPlan, planName, subscriptionPlan } from '../mealPlans';
 
 const ADMIN_KEY_STORAGE = 'houseOfShrishAdminKey';
 
@@ -202,6 +203,10 @@ export default function AdminHolidays() {
 
   async function handleSaveSubscription(sub) {
     setSubsError('');
+    if (subscriptionPlan(sub) === 'weekly' && !isMonday(editValue(sub, 'startDate'))) {
+      setSubsError('Weekly packages start on a Monday.');
+      return;
+    }
     setSavingSubId(sub.id);
     try {
       const updated = await updateAdminSubscription(
@@ -242,6 +247,11 @@ export default function AdminHolidays() {
     event.preventDefault();
     setManualSubscriptionError('');
     setManualSubscriptionSaved(false);
+    const manualItem = menuItems.find((item) => item.id === Number(manualItemId));
+    if (isWeeklyPlan(manualItem) && !isMonday(manualStartDate)) {
+      setManualSubscriptionError('Weekly packages start on a Monday.');
+      return;
+    }
     setAddingManualSubscription(true);
     try {
       const subscription = await addAdminSubscription({
@@ -369,13 +379,15 @@ export default function AdminHolidays() {
     );
   }
 
+  const manualWeekly = isWeeklyPlan(menuItems.find((item) => item.id === Number(manualItemId)));
+
   return (
     <div className="events-page">
       <BackToMenu />
       <h2>Subscription Settings</h2>
       <form className="checkout-form" onSubmit={handleSaveSettings}>
         <label>
-          Monthly subscription duration (working days, excludes Sundays &amp; kitchen-closed days)
+          Monthly subscription duration (working days, excludes Sundays &amp; kitchen-closed days). Weekly packages are always 5 weekdays, Monday to Friday.
           <input
             type="number"
             min={1}
@@ -447,7 +459,7 @@ export default function AdminHolidays() {
         )}
       </div>
 
-      <h2 style={{ marginTop: 32 }}>Monthly Subscriptions</h2>
+      <h2 style={{ marginTop: 32 }}>Meal Subscriptions</h2>
       {subsError && <p className="status-text error">{subsError}</p>}
       {subscriptions.length === 0 ? (
         <p className="status-text">No subscriptions yet.</p>
@@ -472,7 +484,7 @@ export default function AdminHolidays() {
                   {!sub.approved ? 'Pending approval' : sub.expiresToday ? 'Expires today' : sub.expired ? 'Expired' : 'Active'}
                 </span>
               </div>
-              <p className="subscription-item-name">{sub.itemName}</p>
+              <p className="subscription-item-name">{sub.itemName} · {planName(sub)}{isSkippable(sub) ? '' : ' · no skips'}</p>
               {sub.carryForwardDeadline && <p className="subscription-summary-dates">Original end: {sub.originalEndDate} · Carry-forward deadline: {sub.carryForwardDeadline}</p>}
               {sub.mealsBeyondDeadline > 0 && <p className="status-text error">{sub.mealsBeyondDeadline} meal(s) exceed the carry-forward deadline.</p>}
               {sub.deactivated && <p className="status-text">Subscription deactivated after cancellation or refund.</p>}
@@ -537,10 +549,10 @@ export default function AdminHolidays() {
           </select>
         </label>
         <label>
-          Monthly package
+          Meal package
           <select value={manualItemId} onChange={(event) => setManualItemId(event.target.value)} required>
             <option value="">Choose a package</option>
-            {menuItems.filter((item) => item.name.toLowerCase().startsWith('monthly')).map((item) => (
+            {menuItems.filter(isMealPackage).map((item) => (
               <option key={item.id} value={item.id}>{item.name}</option>
             ))}
           </select>
@@ -548,8 +560,13 @@ export default function AdminHolidays() {
         <label>
           Start date
           <input type="date" value={manualStartDate} onChange={(event) => setManualStartDate(event.target.value)} required />
+          {manualWeekly && <span className={isMonday(manualStartDate) ? 'status-text' : 'status-text error'}>Weekly packages start on a Monday.</span>}
         </label>
-        <p className="status-text">This offline subscription will be marked approved for {workingDays || 'configured'} working days.</p>
+        <p className="status-text">
+          {manualWeekly
+            ? 'This offline subscription will be marked approved for 5 weekdays, Monday to Friday.'
+            : `This offline subscription will be marked approved for ${workingDays || 'configured'} working days.`}
+        </p>
         {manualSubscriptionError && <p className="status-text error">{manualSubscriptionError}</p>}
         {manualSubscriptionSaved && <p className="status-text">Offline subscription added and approved.</p>}
         <button className="btn-primary" type="submit" disabled={addingManualSubscription || users.length === 0}>
@@ -601,10 +618,10 @@ export default function AdminHolidays() {
       ) : (
         <div className="subscription-list">
           {orders.map((order) => {
-            const monthlyItems = order.items.filter((item) => item.name.toLowerCase().startsWith('monthly'));
-            const subscriptionOnly = monthlyItems.length === order.items.length && monthlyItems.length > 0;
+            const packageItems = order.items.filter(isMealPackage);
+            const subscriptionOnly = packageItems.length === order.items.length && packageItems.length > 0;
             const linkedSubscriptions = subscriptions.filter((subscription) => subscription.orderId === order.id);
-            const subscriptionApproved = monthlyItems.length > 0 && monthlyItems.every((item) =>
+            const subscriptionApproved = packageItems.length > 0 && packageItems.every((item) =>
               linkedSubscriptions.some((subscription) => subscription.itemName === item.name && subscription.approved)
             );
             const approvalLabel = subscriptionApproved ? 'Subscription approved' : 'Pending approval';
@@ -618,7 +635,7 @@ export default function AdminHolidays() {
                 </span>
               </div>
               <p className="subscription-item-name">{order.items.map((item) => `${item.name} × ${item.quantity}${item.mealService ? ` · ${item.mealService === 'both' ? 'Lunch + Dinner' : item.mealService[0].toUpperCase() + item.mealService.slice(1)}` : ''}`).join(', ')}</p>
-              {monthlyItems.length > 0 && !subscriptionOnly && <p className="subscription-summary-dates">Monthly package: {approvalLabel}</p>}
+              {packageItems.length > 0 && !subscriptionOnly && <p className="subscription-summary-dates">Meal package: {approvalLabel}</p>}
               <p className="subscription-summary-dates">
                 ₹{order.total}{!subscriptionOnly && ` · Delivery: ${order.scheduledDate ? `${order.scheduledDate} · ${order.timeSlot === 'both' ? 'Lunch + Dinner' : order.timeSlot}` : 'No scheduled delivery'}`}
               </p>

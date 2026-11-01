@@ -64,7 +64,7 @@ function SubscriptionExpiryBanner() {
 
   return (
     <div className="expiry-banner">
-      Your monthly subscription ends today, renew to enjoy delicious home meal
+      Your meal subscription ends today, renew to enjoy delicious home meal
     </div>
   )
 }

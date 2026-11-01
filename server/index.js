@@ -573,7 +573,7 @@ function buildRunStops(data, today) {
             if (item.mealService) return false;
             const menuItem = menuById.get(item.id);
             const isMeal = menuItem?.category === 'Pure Veg Meals' &&
-              !menuItem.name.toLowerCase().startsWith('monthly');
+              !isMealPlan(menuItem.name);
             return !isMeal && service === services[0];
           })
         : order.items;
@@ -760,7 +760,7 @@ function subscriptionCoverage(data, userId) {
   return covered;
 }
 
-function monthlyCoverageConflict(data, userId, monthlyItems) {
+function planCoverageConflict(data, userId, monthlyItems) {
   const covered = subscriptionCoverage(data, userId);
   for (const item of monthlyItems) {
     const meals = getSubscriptionMealSlots(item.name);
@@ -780,7 +780,7 @@ function stockUsed(data, date, itemId) {
 function kitchenMealCount(data, date) {
   const menuById = new Map(data.menu.map((item) => [item.id, item]));
   const purchases = data.orders.filter((order) => reservesStock(order) && (order.scheduledDate || businessDate(order.createdAt)) === date)
-    .reduce((total, order) => total + order.items.filter((item) => menuById.get(item.id)?.category === 'Pure Veg Meals' && !item.name.toLowerCase().startsWith('monthly'))
+    .reduce((total, order) => total + order.items.filter((item) => menuById.get(item.id)?.category === 'Pure Veg Meals' && !isMealPlan(item.name))
       .reduce((quantity, item) => quantity + item.quantity * (item.mealService === 'both' ? 2 : 1), 0), 0);
   const subscriptions = data.subscriptions.filter((subscription) => subscriptionInService(subscription, data))
     .reduce((total, subscription) => total + buildSubscriptionSchedule(subscription, subscriptionHolidays(data)).schedule
@@ -890,6 +890,37 @@ function todayISTStr() {
   return `${part('year')}-${part('month')}-${part('day')}`;
 }
 
+// Meal packages are recognised by name, as the menu always has been:
+// "Monthly (…)" runs for the configured working days (Mon–Sat), "Weekly (…)"
+// for five weekdays (Mon–Fri) starting on a Monday, with no customer skips.
+const WEEKLY_PLAN_DAYS = 5;
+
+function mealPlanKind(name) {
+  const lower = String(name || '').toLowerCase();
+  if (lower.startsWith('monthly')) return 'monthly';
+  if (lower.startsWith('weekly')) return 'weekly';
+  return null;
+}
+
+function isMealPlan(name) {
+  return mealPlanKind(name) !== null;
+}
+
+function isMonday(dateStr) {
+  return isValidDateString(dateStr) && new Date(`${dateStr}T00:00:00Z`).getUTCDay() === 1;
+}
+
+/// Today when it is a Monday, otherwise the coming Monday (IST).
+function nextMondayIST() {
+  const cursor = new Date(`${todayISTStr()}T00:00:00Z`);
+  while (cursor.getUTCDay() !== 1) cursor.setUTCDate(cursor.getUTCDate() + 1);
+  return cursor.toISOString().slice(0, 10);
+}
+
+function planWorkingDays(name, settings) {
+  return mealPlanKind(name) === 'weekly' ? WEEKLY_PLAN_DAYS : settings.subscriptionWorkingDays;
+}
+
 function getSubscriptionMealSlots(itemName) {
   const name = String(itemName || '').toLowerCase();
   if (name.includes('lunch + dinner') || name.includes('lunch and dinner') || name.includes('both')) return ['lunch', 'dinner'];
@@ -915,12 +946,14 @@ function canCancelSubscriptionMeal(date, meal) {
 
 // Holidays and kitchen failures both cost the customer delivery days they did
 // not choose to lose, so each pushes the deadline out.
-function subscriptionCarryForwardDeadline(startDate, originalEndDate, holidays, extraWorkingDays = 0) {
+function subscriptionCarryForwardDeadline(startDate, originalEndDate, holidays, extraWorkingDays = 0, weekly = false) {
   const original = new Date(`${originalEndDate}T00:00:00Z`);
   const monthStart = new Date(Date.UTC(original.getUTCFullYear(), original.getUTCMonth() + 1, 1));
   const lastDay = new Date(Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() + 1, 0)).getUTCDate();
   monthStart.setUTCDate(Math.min(original.getUTCDate(), lastDay));
-  const baseDeadline = monthStart.toISOString().slice(0, 10);
+  // Weekly plans have no customer skips to make room for, so their only grace
+  // is for kitchen-failure days, counted below.
+  const baseDeadline = weekly ? originalEndDate : monthStart.toISOString().slice(0, 10);
   const holidayDates = [...new Set(holidays.map((holiday) => holiday.date))]
     .filter((date) => isValidDateString(date) && date >= startDate)
     .sort();
@@ -934,7 +967,7 @@ function subscriptionCarryForwardDeadline(startDate, originalEndDate, holidays, 
   let guard = 0;
   while (remaining > 0 && guard++ < 400) {
     deadline.setUTCDate(deadline.getUTCDate() + 1);
-    if (isWorkingDay(deadline.toISOString().slice(0, 10), holidays)) remaining--;
+    if (isWorkingDay(deadline.toISOString().slice(0, 10), holidays, weekly)) remaining--;
   }
   return deadline.toISOString().slice(0, 10);
 }
@@ -945,13 +978,15 @@ function buildSubscriptionSchedule(subscription, holidays) {
   const mealSlots = Array.isArray(subscription.mealSlots) && subscription.mealSlots.length
     ? ['lunch', 'dinner'].filter((meal) => subscription.mealSlots.includes(meal))
     : getSubscriptionMealSlots(subscription.itemName);
+  const weekly = mealPlanKind(subscription.itemName) === 'weekly';
+  const plan = weekly ? 'weekly' : 'monthly';
   if (subscription.deactivated || !isValidDateString(subscription.startDate) || !Number.isInteger(requiredDays) || requiredDays < 1) {
-    return { mealSlots, schedule: [], endDate: null, daysRemaining: 0, remainingMeals: 0, expiresToday: false, expired: true };
+    return { plan, skippable: false, mealSlots, schedule: [], endDate: null, daysRemaining: 0, remainingMeals: 0, expiresToday: false, expired: true };
   }
 
-  const originalEndDate = computeSubscriptionEndDate(subscription.startDate, requiredDays, holidays);
+  const originalEndDate = computeSubscriptionEndDate(subscription.startDate, requiredDays, holidays, weekly);
   if (!originalEndDate) {
-    return { mealSlots, schedule: [], endDate: null, daysRemaining: 0, remainingMeals: 0, expiresToday: false, expired: true };
+    return { plan, skippable: false, mealSlots, schedule: [], endDate: null, daysRemaining: 0, remainingMeals: 0, expiresToday: false, expired: true };
   }
   const skipped = new Set((subscription.skippedMeals || []).map((entry) => `${entry.date}:${entry.meal}`));
   const delivered = new Set((subscription.deliveredMeals || []).map((entry) => `${entry.date}:${entry.meal}`));
@@ -962,7 +997,8 @@ function buildSubscriptionSchedule(subscription, holidays) {
     subscription.startDate,
     originalEndDate,
     holidays,
-    Math.ceil(maintenance.size / mealSlots.length)
+    Math.ceil(maintenance.size / mealSlots.length),
+    weekly
   );
 
   const requiredMeals = requiredDays * mealSlots.length;
@@ -977,7 +1013,7 @@ function buildSubscriptionSchedule(subscription, holidays) {
   for (let offset = 0; offset < maxDays; offset++) {
     const date = cursor.toISOString().slice(0, 10);
     if (date > carryForwardDeadline) break;
-    if (isWorkingDay(date, holidays)) {
+    if (isWorkingDay(date, holidays, weekly)) {
       for (const meal of mealSlots) {
         if (scheduledMeals >= requiredMeals) break;
         const key = `${date}:${meal}`;
@@ -990,7 +1026,7 @@ function buildSubscriptionSchedule(subscription, holidays) {
           continue;
         }
         const status = delivered.has(key) ? 'delivered' : date < today ? 'elapsed' : 'upcoming';
-        schedule.push({ date, meal, status, canCancel: status === 'upcoming' && canCancelSubscriptionMeal(date, meal) });
+        schedule.push({ date, meal, status, canCancel: !weekly && status === 'upcoming' && canCancelSubscriptionMeal(date, meal) });
         scheduledMeals++;
         endDate = date;
       }
@@ -1005,6 +1041,8 @@ function buildSubscriptionSchedule(subscription, holidays) {
   const mealsBeyondDeadline = Math.max(0, requiredMeals - scheduledMeals);
   if (mealsBeyondDeadline > 0) endDate = carryForwardDeadline;
   return {
+    plan,
+    skippable: !weekly,
     mealSlots,
     schedule,
     endDate,
@@ -1020,19 +1058,19 @@ function buildSubscriptionSchedule(subscription, holidays) {
 
 // Counts a date as a working day when it isn't a Sunday and isn't an admin-added holiday.
 // Uses UTC throughout so results don't shift depending on the server's local timezone.
-function isWorkingDay(dateStr, holidays) {
+function isWorkingDay(dateStr, holidays, weekdaysOnly = false) {
   const dow = new Date(`${dateStr}T00:00:00Z`).getUTCDay();
-  if (dow === 0) return false;
+  if (dow === 0 || (weekdaysOnly && dow === 6)) return false;
   return !holidays.some((h) => h.date === dateStr);
 }
 
 // Finds the date on which the Nth working day (inclusive of the start date) falls.
-function computeSubscriptionEndDate(startDate, requiredWorkingDays, holidays) {
+function computeSubscriptionEndDate(startDate, requiredWorkingDays, holidays, weekdaysOnly = false) {
   let count = 0;
   const cursor = new Date(`${startDate}T00:00:00Z`);
-  for (let i = 0; i < requiredWorkingDays * 3; i++) {
+  for (let i = 0; i < requiredWorkingDays * 3 + 14; i++) {
     const dateStr = cursor.toISOString().slice(0, 10);
-    if (isWorkingDay(dateStr, holidays)) {
+    if (isWorkingDay(dateStr, holidays, weekdaysOnly)) {
       count++;
       if (count === requiredWorkingDays) return dateStr;
     }
@@ -1878,7 +1916,7 @@ app.patch('/api/admin/settings', async (req, res) => {
   res.json({ ...updates, onlinePaymentAvailable: YOUPI_CONFIGURED });
 });
 
-// GET /api/subscriptions/me - list the current user's admin-approved Monthly subscriptions
+// GET /api/subscriptions/me - list the current user's admin-approved Monthly and Weekly subscriptions
 app.get('/api/subscriptions/me', async (req, res) => {
   const db = await getDb();
   const user = await getUserFromToken(db, req);
@@ -1899,6 +1937,9 @@ app.post('/api/subscriptions/:id/skip', async (req, res) => {
 
   const subscription = db.data.subscriptions.find((entry) => entry.id === req.params.id && entry.userId === user.id);
   if (!subscription || !subscription.approved) return res.status(404).json({ error: 'Active subscription not found.' });
+  if (mealPlanKind(subscription.itemName) === 'weekly') {
+    return res.status(409).json({ error: 'Weekly packages cannot be skipped.' });
+  }
 
   const { date, meal } = req.body || {};
   if (!isValidDateString(date) || !['lunch', 'dinner'].includes(meal)) {
@@ -1945,6 +1986,9 @@ app.post('/api/subscriptions/:id/skip-range', async (req, res) => {
 
   const subscription = db.data.subscriptions.find((entry) => entry.id === req.params.id && entry.userId === user.id);
   if (!subscription || !subscription.approved) return res.status(404).json({ error: 'Active subscription not found.' });
+  if (mealPlanKind(subscription.itemName) === 'weekly') {
+    return res.status(409).json({ error: 'Weekly packages cannot be skipped.' });
+  }
 
   const { fromDate, toDate, meals } = req.body || {};
   if (!isValidDateString(fromDate) || !isValidDateString(toDate) || fromDate > toDate ||
@@ -2007,7 +2051,7 @@ app.post('/api/subscriptions/:id/skip-range', async (req, res) => {
   res.json({ ...subscription, ...projectedSchedule });
 });
 
-// GET /api/admin/subscriptions - list every user's Monthly subscriptions (requires admin key)
+// GET /api/admin/subscriptions - list every user's Monthly and Weekly subscriptions (requires admin key)
 app.get('/api/admin/subscriptions', async (req, res) => {
   if (req.headers['x-admin-key'] !== ADMIN_KEY) {
     return res.status(403).json({ error: 'Invalid admin key.' });
@@ -2038,11 +2082,14 @@ app.post('/api/admin/subscriptions', async (req, res) => {
   const user = db.data.users.find((candidate) => candidate.id === Number(userId));
   if (!user) return res.status(404).json({ error: 'Registered user not found.' });
   const menuItem = db.data.menu.find((item) => item.id === Number(itemId));
-  if (!menuItem || !menuItem.name.toLowerCase().startsWith('monthly')) {
-    return res.status(400).json({ error: 'Choose a monthly package.' });
+  if (!menuItem || !isMealPlan(menuItem.name)) {
+    return res.status(400).json({ error: 'Choose a monthly or weekly package.' });
   }
   if (!isValidDateString(startDate)) return res.status(400).json({ error: 'Start date must be a valid YYYY-MM-DD date.' });
-  const coverageConflict = monthlyCoverageConflict(db.data, user.id, [menuItem]);
+  if (mealPlanKind(menuItem.name) === 'weekly' && !isMonday(startDate)) {
+    return res.status(400).json({ error: 'Weekly packages start on a Monday.' });
+  }
+  const coverageConflict = planCoverageConflict(db.data, user.id, [menuItem]);
   if (coverageConflict) return res.status(409).json({ error: coverageConflict });
 
   const subscription = {
@@ -2053,7 +2100,7 @@ app.post('/api/admin/subscriptions', async (req, res) => {
     customisation: menuItem.customisations?.[0] || '',
     mealSlots: getSubscriptionMealSlots(menuItem.name),
     startDate,
-    workingDaysRequired: getSettings(db.data).subscriptionWorkingDays,
+    workingDaysRequired: planWorkingDays(menuItem.name, getSettings(db.data)),
     skippedMeals: [],
     approved: true,
     source: 'admin_manual',
@@ -2082,6 +2129,9 @@ app.patch('/api/admin/subscriptions/:id', async (req, res) => {
   if (startDate !== undefined) {
     if (!isValidDateString(startDate)) {
       return res.status(400).json({ error: 'Start date must be in YYYY-MM-DD format.' });
+    }
+    if (mealPlanKind(subscription.itemName) === 'weekly' && !isMonday(startDate)) {
+      return res.status(400).json({ error: 'Weekly packages start on a Monday.' });
     }
     subscription.startDate = startDate;
   }
@@ -2210,6 +2260,11 @@ app.patch('/api/admin/subscriptions/:id/approve', async (req, res) => {
     const slots = getSubscriptionMealSlots(subscription.itemName);
     const start = new Date(`${today}T00:00:00Z`);
     if (slots.some((meal) => !canCancelSubscriptionMeal(today, meal))) start.setUTCDate(start.getUTCDate() + 1);
+    // A weekly plan always runs Monday to Friday, so a late approval moves it
+    // to the next Monday rather than starting mid-week.
+    if (mealPlanKind(subscription.itemName) === 'weekly') {
+      while (start.getUTCDay() !== 1) start.setUTCDate(start.getUTCDate() + 1);
+    }
     const earliestDate = start.toISOString().slice(0, 10);
     if (subscription.startDate < earliestDate) subscription.startDate = earliestDate;
     subscription.approvedAt = new Date().toISOString();
@@ -2429,8 +2484,8 @@ app.patch('/api/admin/orders/:id/status', async (req, res) => {
   if (['preparing', 'out_for_delivery', 'delivered', 'refund_requested', 'refunded'].includes(status) && paymentStatus(order) !== 'verified') {
     return res.status(409).json({ error: 'Verified payment is required for this action.' });
   }
-  if (['preparing', 'out_for_delivery', 'delivered'].includes(status) && order.items.every((item) => item.name.toLowerCase().startsWith('monthly'))) {
-    return res.status(409).json({ error: 'Monthly purchases use subscription approval, not delivery stages.' });
+  if (['preparing', 'out_for_delivery', 'delivered'].includes(status) && order.items.every((item) => isMealPlan(item.name))) {
+    return res.status(409).json({ error: 'Meal package purchases use subscription approval, not delivery stages.' });
   }
   if (status === 'paid') {
     order.paymentStatus = 'verified';
@@ -2535,7 +2590,7 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
   const deliveryCharge = hasDryFruitsLadoo && outsideDeliveryRadius ? LADOO_DELIVERY_CHARGE : 0;
   const cutoffExempt = items.every((line) => {
     const menuItem = menuById.get(Number(line.id));
-    return menuItem && (menuItem.name.toLowerCase().startsWith('monthly') || menuItem.id === 6);
+    return menuItem && (isMealPlan(menuItem.name) || menuItem.id === 6);
   });
   const mealService = cutoffExempt ? null : getOrderMealService(settings);
   if (!cutoffExempt && !mealService) {
@@ -2556,7 +2611,7 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
   const requestedMeals = items.reduce((total, line) => {
     const item = menuById.get(Number(line.id));
     if (item?.category !== 'Pure Veg Meals' ||
-        item.name.toLowerCase().startsWith('monthly')) return total;
+        isMealPlan(item.name)) return total;
     const service = item.name.toLowerCase() === 'single meal'
       ? line.mealService || mealService
       : mealService;
@@ -2573,20 +2628,24 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
 
   const requiresAccount = items.some((line) => {
     const menuItem = menuById.get(Number(line.id));
-    return menuItem && menuItem.name.toLowerCase().startsWith('monthly');
+    return menuItem && isMealPlan(menuItem.name);
   });
   if (requiresAccount && !user) {
-    return res.status(401).json({ error: 'Please sign up or log in to order Monthly packages.' });
+    return res.status(401).json({ error: 'Please sign up or log in to order meal packages.' });
   }
   if (requiresAccount) {
     const monthlyItems = items.map((line) => menuById.get(Number(line.id)))
-      .filter((item) => item && item.name.toLowerCase().startsWith('monthly'));
-    const coverageConflict = monthlyCoverageConflict(db.data, user.id, monthlyItems);
+      .filter((item) => item && isMealPlan(item.name));
+    const coverageConflict = planCoverageConflict(db.data, user.id, monthlyItems);
     if (coverageConflict) return res.status(409).json({ error: coverageConflict });
   }
-  const preferredStartDate = subscriptionStartDate ?? todayISTStr();
+  const hasWeeklyPlan = items.some((line) => mealPlanKind(menuById.get(Number(line.id))?.name) === 'weekly');
+  const preferredStartDate = subscriptionStartDate ?? (hasWeeklyPlan ? nextMondayIST() : todayISTStr());
   if (requiresAccount && (!isValidDateString(preferredStartDate) || preferredStartDate < todayISTStr())) {
     return res.status(400).json({ error: 'Choose a valid subscription start date from today onward (IST).' });
+  }
+  if (hasWeeklyPlan && !isMonday(preferredStartDate)) {
+    return res.status(400).json({ error: 'Weekly packages start on a Monday. Choose a Monday start date.' });
   }
 
   let total = 0;
@@ -2599,7 +2658,7 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
     }
     if (menuItem.available === false) return res.status(409).json({ error: `${menuItem.name} is currently unavailable.` });
     const requestedForItem = items.filter((item) => Number(item.id) === menuItem.id).reduce((total, item) => total + Number(item.quantity), 0);
-    if (menuItem.name.toLowerCase().startsWith('monthly') && requestedForItem !== 1) return res.status(400).json({ error: 'Order one subscription per monthly plan at a time.' });
+    if (isMealPlan(menuItem.name) && requestedForItem !== 1) return res.status(400).json({ error: 'Order one subscription per meal package at a time.' });
     if (Number.isInteger(menuItem.dailyStock)) {
       const requestedStock = items.filter((item) => Number(item.id) === menuItem.id)
         .reduce((sum, item) => sum + Number(item.quantity) * (item.mealService === 'both' ? 2 : 1), 0);
@@ -2619,7 +2678,7 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
       customisation = line.customisation;
     }
     const isMeal = menuItem.category === 'Pure Veg Meals' &&
-      !menuItem.name.toLowerCase().startsWith('monthly');
+      !isMealPlan(menuItem.name);
     const lineMealService = isMeal
       ? menuItem.name.toLowerCase() === 'single meal'
         ? line.mealService || mealService
@@ -2719,7 +2778,7 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
   if (user) {
     const startDate = preferredStartDate;
     for (const item of orderItems) {
-      if (item.name.toLowerCase().startsWith('monthly')) {
+      if (isMealPlan(item.name)) {
         db.data.subscriptions.push({
           id: `${order.id}-${item.id}`,
           userId: user.id,
@@ -2728,7 +2787,7 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
           customisation: item.customisation,
           mealSlots: getSubscriptionMealSlots(item.name),
           startDate,
-          workingDaysRequired: settings.subscriptionWorkingDays,
+          workingDaysRequired: planWorkingDays(item.name, settings),
           skippedMeals: [],
           approved: false,
           createdAt: new Date().toISOString()
@@ -2741,7 +2800,7 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
 
   const upiUri = upiPaymentUri(getSettings(db.data), total, order.id);
 
-  const newSubscriptions = orderItems.filter((item) => item.name.toLowerCase().startsWith('monthly'));
+  const newSubscriptions = orderItems.filter((item) => isMealPlan(item.name));
   await notifyAdmins(db, {
     title: newSubscriptions.length > 0 ? 'New subscription order' : 'New order',
     body: `#${order.orderNumber} · ₹${total} · ${order.customer.name}` +
