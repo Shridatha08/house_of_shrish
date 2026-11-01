@@ -10,17 +10,24 @@ const app = express();
 const PORT = process.env.PORT || 4000;
 if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
 
-const UPI_ID = 'houseofshrish@ybl';
+// Default receiving UPI ID; the admin can change it under Settings.
+const DEFAULT_UPI_ID = 'houseofshrish@ybl';
+const UPI_ID_PATTERN = /^[a-zA-Z0-9._-]{2,256}@[a-zA-Z][a-zA-Z0-9]{1,63}$/;
 const MERCHANT_NAME = 'House of Shrish';
 
-// Optional self-hosted YouPI-PG gateway (https://github.com/youpi-pg/YouPI-PG).
-// Off unless both the gateway URL and its webhook secret are set; the manual
-// "I've paid" flow keeps working either way. A YouPI success only moves the
-// order to payment_review with the UTR attached — an admin still approves it.
+// Optional self-hosted YouPI-PG V2 gateway (https://github.com/youpi-pg/YouPI-PG).
+// Offered to customers only when the gateway URL, merchant ID and webhook
+// secret are all set AND the admin has switched online payment on in Settings;
+// the manual "I've paid" flow keeps working either way. An observed or reconciled
+// UPI payment only moves the order to payment_review with the UTR attached —
+// an admin still approves it.
 const YOUPI_API_URL = (process.env.YOUPI_API_URL || '').replace(/\/+$/, '');
 const YOUPI_MERCHANT_ID = process.env.YOUPI_MERCHANT_ID || '';
 const YOUPI_WEBHOOK_SECRET = process.env.YOUPI_WEBHOOK_SECRET || '';
-const YOUPI_ENABLED = Boolean(YOUPI_API_URL && YOUPI_WEBHOOK_SECRET);
+const YOUPI_CONFIGURED = Boolean(YOUPI_API_URL && YOUPI_MERCHANT_ID && YOUPI_WEBHOOK_SECRET);
+// The gateway retries a failed delivery for up to an hour with the original
+// timestamp, so the freshness window has to outlast that (and a cold start).
+const YOUPI_WEBHOOK_MAX_AGE_MS = 2 * 60 * 60 * 1000;
 const PUBLIC_SITE_URL = (process.env.PUBLIC_SITE_URL || 'https://house-of-shrish.vercel.app').replace(/\/+$/, '');
 const YOUPI_ORDER_PREFIX = 'HOS-';
 
@@ -106,15 +113,31 @@ function buildOrderNumber(date, dailySequence) {
 
 app.use(cors());
 
+function youpiSignature(bytes) {
+  return 'sha256=' + crypto.createHmac('sha256', YOUPI_WEBHOOK_SECRET).update(bytes).digest('hex');
+}
+
+function sameSignature(given, expected) {
+  return given.length === expected.length && crypto.timingSafeEqual(Buffer.from(given), Buffer.from(expected));
+}
+
 // POST /api/payments/youpi/webhook - signed payment outcome from the YouPI gateway.
 // Registered before express.json() because the HMAC covers the raw bytes.
+// Stays live while the admin toggle is off, so a payment started just before
+// it was switched off still reaches the admin.
 app.post('/api/payments/youpi/webhook', express.raw({ type: () => true, limit: '64kb' }), async (req, res) => {
-  if (!YOUPI_ENABLED) return res.status(404).json({ error: 'Not found.' });
+  if (!YOUPI_CONFIGURED) return res.status(404).json({ error: 'Not found.' });
   const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
-  const signature = String(req.headers['x-gateway-signature'] || '');
-  const expected = 'sha256=' + crypto.createHmac('sha256', YOUPI_WEBHOOK_SECRET).update(raw).digest('hex');
-  if (signature.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) {
+  // The V2 signature binds the delivery timestamp, so a captured delivery
+  // cannot be replayed once it falls outside the freshness window.
+  const timestamp = String(req.headers['x-gateway-timestamp'] || '');
+  const signature = String(req.headers['x-gateway-signature-v2'] || '');
+  if (!/^\d{1,16}$/.test(timestamp) || !sameSignature(signature, youpiSignature(Buffer.concat([Buffer.from(`${timestamp}.`), raw])))) {
     return res.status(401).json({ error: 'Invalid webhook signature.' });
+  }
+  const age = Date.now() - Number(timestamp);
+  if (age > YOUPI_WEBHOOK_MAX_AGE_MS || age < -5 * 60 * 1000) {
+    return res.status(401).json({ error: 'Stale webhook delivery.' });
   }
   let payload;
   try {
@@ -126,9 +149,12 @@ app.post('/api/payments/youpi/webhook', express.raw({ type: () => true, limit: '
   // Anything this server cannot act on is still acknowledged, so the gateway
   // does not keep retrying it.
   const ignore = (reason) => res.json({ received: true, ignored: reason });
-  if (payload.event !== 'SUCCESS') return ignore('event');
-  // The checkout can also offer cash on delivery; only an observed UPI credit counts.
+  const duplicate = () => res.json({ received: true, duplicate: true });
+  // SUCCESS is the gateway's cash/counter outcome, never money received over UPI.
+  const event = String(payload.event || '');
+  if (!['OBSERVED_SUCCESS', 'RECONCILED', 'MANUAL_REVIEW'].includes(event)) return ignore('event');
   if ((payload.method || 'UPI') !== 'UPI') return ignore('method');
+  if (event === 'RECONCILED' && payload.settlementState !== 'RECONCILED') return ignore('settlement');
   const ref = String(payload.orderId || '');
   if (!ref.startsWith(YOUPI_ORDER_PREFIX)) return ignore('order');
   const orderId = Number(ref.slice(YOUPI_ORDER_PREFIX.length));
@@ -136,31 +162,65 @@ app.post('/api/payments/youpi/webhook', express.raw({ type: () => true, limit: '
   const db = await getDb();
   const order = db.data.orders.find((o) => o.id === orderId);
   if (!order?.youpi?.paymentIds?.includes(payload.paymentId)) return ignore('order');
-  // The signature does not cover the timestamp, so a captured delivery can be
-  // replayed; recording the payment once is what makes replays harmless.
-  if (order.youpi.status === 'SUCCESS' || order.youpi.mismatch) return res.json({ received: true, duplicate: true });
+  const youpi = order.youpi;
+  // The delivery ID is stable across retries, so it catches a redelivery the
+  // order state alone would not (a repeated manual-review alert, say).
+  const deliveryId = String(payload.deliveryId || req.headers['x-gateway-delivery-id'] || '').slice(0, 64);
+  if (deliveryId && youpi.deliveryIds?.includes(deliveryId)) return duplicate();
+  const remember = () => {
+    if (deliveryId) youpi.deliveryIds = [...(youpi.deliveryIds || []), deliveryId].slice(-20);
+  };
 
   const nowIso = new Date().toISOString();
-  const expectedPaise = Math.round(Number(order.total) * 100);
   const utr = String(payload.utr || '').slice(0, 32);
-  if (Number(payload.amountPaise) !== expectedPaise) {
-    order.youpi.mismatch = { paymentId: payload.paymentId, amountPaise: Number(payload.amountPaise), utr, at: nowIso };
+  const alert = (title, body) => notifyAdmins(db, {
+    title,
+    body,
+    data: { type: 'payment_review', orderId: order.id, orderNumber: order.orderNumber }
+  });
+
+  if (event === 'MANUAL_REVIEW') {
+    if (youpi.manualReview?.paymentId === payload.paymentId) return duplicate();
+    youpi.manualReview = { paymentId: payload.paymentId, utr, at: nowIso };
+    remember();
     await db.write();
-    await notifyAdmins(db, {
-      title: 'UPI amount mismatch',
-      body: `#${order.orderNumber} expected ₹${order.total} but the gateway saw ₹${payload.amount}${utr ? ` (UTR ${utr})` : ''}. Check manually.`,
-      data: { type: 'payment_review', orderId: order.id, orderNumber: order.orderNumber }
-    });
+    await alert(
+      'UPI payment needs manual review',
+      `#${order.orderNumber} · ₹${order.total}${utr ? ` · UTR ${utr}` : ''} · the gateway could not match this payment with certainty. Check your bank before approving.`
+    );
+    return res.json({ received: true, manualReview: true });
+  }
+
+  // A reconciliation may follow an observation; nothing outranks it. A recorded
+  // amount mismatch is kept for the admin but never blocks a correct payment.
+  if (youpi.status === 'RECONCILED') return duplicate();
+  if (event === 'OBSERVED_SUCCESS' && youpi.status === 'OBSERVED') return duplicate();
+
+  const expectedPaise = Math.round(Number(order.total) * 100);
+  if (Number(payload.amountPaise) !== expectedPaise) {
+    const seen = youpi.mismatch;
+    if (seen?.paymentId === payload.paymentId && seen.amountPaise === Number(payload.amountPaise) && seen.event === event) return duplicate();
+    youpi.mismatch = { event, paymentId: payload.paymentId, amountPaise: Number(payload.amountPaise), utr, at: nowIso };
+    remember();
+    await db.write();
+    await alert(
+      'UPI amount mismatch',
+      `#${order.orderNumber} expected ₹${order.total} but the gateway saw ₹${payload.amount}${utr ? ` (UTR ${utr})` : ''}. Check manually.`
+    );
     return res.json({ received: true, mismatch: true });
   }
 
-  Object.assign(order.youpi, {
-    status: 'SUCCESS',
+  const reconciled = event === 'RECONCILED';
+  const firstSighting = !youpi.status;
+  Object.assign(youpi, {
+    status: reconciled ? 'RECONCILED' : 'OBSERVED',
     paymentId: payload.paymentId,
-    utr,
-    verificationLevel: Number(payload.verificationLevel) || 0,
-    receivedAt: nowIso
+    utr: utr || youpi.utr || '',
+    verificationLevel: Number(payload.verificationLevel) || youpi.verificationLevel || 0,
+    receivedAt: youpi.receivedAt || nowIso,
+    ...(reconciled ? { reconciledAt: nowIso } : {})
   });
+  remember();
   const lapsed = order.status === 'pending_payment' && !reservesStock(order);
   const unexpected = !['pending_payment', 'payment_review'].includes(order.status);
   if (order.status === 'pending_payment') {
@@ -170,15 +230,23 @@ app.post('/api/payments/youpi/webhook', express.raw({ type: () => true, limit: '
   }
   await db.write();
 
+  const reference = youpi.utr ? ` · UTR ${youpi.utr}` : '';
+  if (!firstSighting) {
+    await alert(
+      'UPI payment reconciled',
+      `#${order.orderNumber} · ₹${order.total}${reference} · matched your bank statement${order.status === 'payment_review' ? ', safe to approve' : ` · order is ${order.status.replaceAll('_', ' ')}`}`
+    );
+    return res.json({ received: true });
+  }
   const note = order.cancelReason === PAYMENT_TIMEOUT_REASON ? ' · arrived after the order timed out and was cancelled, refund or contact the customer'
     : unexpected ? ` · arrived for a ${order.status.replaceAll('_', ' ')} order`
       : lapsed ? ' · arrived after the 30-minute window, check stock'
-        : ' · auto-detected, approve to confirm';
-  await notifyAdmins(db, {
-    title: unexpected || lapsed ? 'UPI payment needs attention' : 'UPI payment received',
-    body: `#${order.orderNumber} · ₹${order.total} · ${order.customer.name}${utr ? ` · UTR ${utr}` : ''}${note}`,
-    data: { type: 'payment_review', orderId: order.id, orderNumber: order.orderNumber }
-  });
+        : reconciled ? ' · matched your bank statement, approve to confirm'
+          : ' · auto-detected, check your bank and approve to confirm';
+  await alert(
+    unexpected || lapsed ? 'UPI payment needs attention' : 'UPI payment received',
+    `#${order.orderNumber} · ₹${order.total} · ${order.customer.name}${reference}${note}`
+  );
   res.json({ received: true });
 });
 
@@ -763,8 +831,18 @@ function getSettings(data) {
     lunchCutoffTime: '11:00',
     dinnerCutoffTime: '18:00',
     deliveryTimeSlots: ['11:00-13:00', '18:00-20:00'],
+    onlinePaymentEnabled: false,
+    upiId: DEFAULT_UPI_ID,
     ...(data.settings || {})
   };
+}
+
+function onlinePaymentActive(settings) {
+  return YOUPI_CONFIGURED && settings.onlinePaymentEnabled === true;
+}
+
+function upiPaymentUri(settings, amount, orderId) {
+  return `upi://pay?pa=${encodeURIComponent(settings.upiId)}&pn=${encodeURIComponent(MERCHANT_NAME)}&am=${amount}&cu=INR&tn=${encodeURIComponent('Order ' + orderId)}`;
 }
 
 function isBeforeCutoff(cutoff, now = new Date()) {
@@ -978,6 +1056,24 @@ function countWorkingDaysRemaining(today, endDate, holidays) {
 }
 
 // POST /api/auth/register - create a new account
+// Customer passwords: 8–128 characters with at least one letter and one digit.
+// Mirrored in the app and website forms.
+function customerPasswordProblem(password) {
+  if (typeof password !== 'string' || password.length < 8) return 'Password must be at least 8 characters.';
+  if (password.length > 128) return 'Password must be at most 128 characters.';
+  if (!/[A-Za-z]/.test(password) || !/\d/.test(password)) return 'Password must include at least one letter and one number.';
+  return null;
+}
+
+// Same answer and similar timing whether or not the number has an account,
+// so the login form cannot be used to discover registered customers.
+const LOGIN_FAILED = 'Wrong phone number or password.';
+let loginDecoyHash;
+async function decoyPasswordHash() {
+  loginDecoyHash ||= await bcrypt.hash(crypto.randomBytes(16).toString('hex'), 10);
+  return loginDecoyHash;
+}
+
 app.post('/api/auth/register', authRateLimit, async (req, res) => {
   const { name, phone, password, address, flatNumber, pincode } = req.body || {};
 
@@ -987,9 +1083,8 @@ app.post('/api/auth/register', authRateLimit, async (req, res) => {
   if (typeof phone !== 'string' || !/^\d{10}$/.test(phone.trim())) {
     return res.status(400).json({ error: 'A valid 10-digit phone number is required.' });
   }
-  if (typeof password !== 'string' || password.length < 6) {
-    return res.status(400).json({ error: 'Password must be at least 6 characters.' });
-  }
+  const passwordProblem = customerPasswordProblem(password);
+  if (passwordProblem) return res.status(400).json({ error: passwordProblem });
   if (typeof address !== 'string' || !address.trim()) {
     return res.status(400).json({ error: 'Address is required.' });
   }
@@ -1044,12 +1139,8 @@ app.post('/api/auth/login', authRateLimit, async (req, res) => {
 
   const db = await getDb();
   const user = db.data.users.find((u) => u.phone === phone.trim());
-  if (!user) {
-    return res.status(401).json({ error: 'User not registered. Please register first.' });
-  }
-  if (!(await bcrypt.compare(password, user.passwordHash))) {
-    return res.status(401).json({ error: 'Incorrect password. Please try again.' });
-  }
+  const matches = await bcrypt.compare(password, user?.passwordHash || await decoyPasswordHash());
+  if (!user || !matches) return res.status(401).json({ error: LOGIN_FAILED });
 
   const token = crypto.randomBytes(24).toString('hex');
   db.data.sessions.push({ token, userId: user.id, createdAt: new Date().toISOString() });
@@ -1092,9 +1183,8 @@ app.post('/api/auth/password-reset/complete', authRateLimit, async (req, res) =>
   const resetKey = typeof req.body?.resetKey === 'string' ? req.body.resetKey.trim().toUpperCase() : '';
   const { password } = req.body || {};
   if (!/^\d{10}$/.test(phone)) return res.status(400).json({ error: 'Enter a valid 10-digit phone number.' });
-  if (typeof password !== 'string' || password.length < 6) {
-    return res.status(400).json({ error: 'Password must be at least 6 characters.' });
-  }
+  const passwordProblem = customerPasswordProblem(password);
+  if (passwordProblem) return res.status(400).json({ error: passwordProblem });
 
   const db = await getDb();
   db.data.passwordResetRequests ||= [];
@@ -1641,7 +1731,8 @@ app.get('/api/store-config', async (req, res) => {
     deliveryRadiusKm: DELIVERY_RADIUS_KM,
     ladooDeliveryCharge: LADOO_DELIVERY_CHARGE,
     singleMealClosedToday: !isWorkingDay(todayISTStr(), subscriptionHolidays(db.data)),
-    onlinePayment: YOUPI_ENABLED
+    onlinePayment: onlinePaymentActive(settings),
+    upiId: settings.upiId
   });
 });
 
@@ -1738,7 +1829,7 @@ app.get('/api/admin/settings', async (req, res) => {
     return res.status(403).json({ error: 'Invalid admin key.' });
   }
   const db = await getDb();
-  res.json(getSettings(db.data));
+  res.json({ ...getSettings(db.data), onlinePaymentAvailable: YOUPI_CONFIGURED });
 });
 
 // PATCH /api/admin/settings - update subscription settings (requires admin key)
@@ -1760,6 +1851,16 @@ app.patch('/api/admin/settings', async (req, res) => {
       !validTime.test(lunchCutoffTime) || !validTime.test(dinnerCutoffTime) || lunchCutoffTime >= dinnerCutoffTime) {
     return res.status(400).json({ error: 'Enter valid IST cutoffs, with lunch earlier than dinner.' });
   }
+  const upiId = input.upiId === undefined ? settings.upiId : String(input.upiId).trim();
+  if (!UPI_ID_PATTERN.test(upiId)) {
+    return res.status(400).json({ error: 'Enter a valid UPI ID, like name@bank.' });
+  }
+  const onlinePaymentEnabled = typeof input.onlinePaymentEnabled === 'boolean' ? input.onlinePaymentEnabled : settings.onlinePaymentEnabled;
+  // Switching on is refused until the gateway exists; an earlier "on" is left
+  // alone so other settings stay saveable if the env vars are later removed.
+  if (onlinePaymentEnabled && !settings.onlinePaymentEnabled && !YOUPI_CONFIGURED) {
+    return res.status(400).json({ error: 'Online payment cannot be enabled: the YouPI gateway is not configured on the server.' });
+  }
   const updates = {
     subscriptionWorkingDays: days,
     announcement: typeof input.announcement === 'string' ? input.announcement.trim().slice(0, 240) : settings.announcement,
@@ -1768,11 +1869,13 @@ app.patch('/api/admin/settings', async (req, res) => {
     dailyOrderCapacity: Number.isInteger(Number(input.dailyOrderCapacity)) && Number(input.dailyOrderCapacity) > 0 ? Number(input.dailyOrderCapacity) : settings.dailyOrderCapacity,
     lunchCutoffTime,
     dinnerCutoffTime,
-    deliveryTimeSlots: Array.isArray(input.deliveryTimeSlots) && input.deliveryTimeSlots.length > 0 ? input.deliveryTimeSlots.filter(isValidTimeSlot) : settings.deliveryTimeSlots
+    deliveryTimeSlots: Array.isArray(input.deliveryTimeSlots) && input.deliveryTimeSlots.length > 0 ? input.deliveryTimeSlots.filter(isValidTimeSlot) : settings.deliveryTimeSlots,
+    onlinePaymentEnabled,
+    upiId
   };
   db.data.settings = updates;
   await db.write();
-  res.json(updates);
+  res.json({ ...updates, onlinePaymentAvailable: YOUPI_CONFIGURED });
 });
 
 // GET /api/subscriptions/me - list the current user's admin-approved Monthly subscriptions
@@ -2636,7 +2739,7 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
 
   await db.write();
 
-  const upiUri = `upi://pay?pa=${encodeURIComponent(UPI_ID)}&pn=${encodeURIComponent(MERCHANT_NAME)}&am=${total}&cu=INR&tn=${encodeURIComponent('Order ' + order.id)}`;
+  const upiUri = upiPaymentUri(getSettings(db.data), total, order.id);
 
   const newSubscriptions = orderItems.filter((item) => item.name.toLowerCase().startsWith('monthly'));
   await notifyAdmins(db, {
@@ -2680,8 +2783,8 @@ app.patch('/api/orders/:id/mark-paid', async (req, res) => {
 
 // POST /api/orders/:id/online-payment - open a YouPI checkout session for an unpaid order
 app.post('/api/orders/:id/online-payment', orderRateLimit, async (req, res) => {
-  if (!YOUPI_ENABLED) return res.status(404).json({ error: 'Online payment is not available.' });
   const db = await getDb();
+  if (!onlinePaymentActive(getSettings(db.data))) return res.status(404).json({ error: 'Online payment is not available.' });
   const order = db.data.orders.find((o) => o.id === Number(req.params.id));
   if (!order) return res.status(404).json({ error: 'Order not found.' });
   const user = await getUserFromToken(db, req);
@@ -2696,8 +2799,7 @@ app.post('/api/orders/:id/online-payment', orderRateLimit, async (req, res) => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Merchant-Key': YOUPI_WEBHOOK_SECRET,
-        ...(YOUPI_MERCHANT_ID ? { 'X-Merchant-Id': YOUPI_MERCHANT_ID } : {})
+        'X-Merchant-Id': YOUPI_MERCHANT_ID
       },
       body: JSON.stringify({
         orderId: `${YOUPI_ORDER_PREFIX}${order.id}`,
@@ -2743,7 +2845,7 @@ app.get('/api/orders/:id', async (req, res) => {
   const user = await getUserFromToken(db, req);
   if (!canAccessOrder(order, user, req)) return res.status(403).json({ error: 'You cannot access this order.' });
   const { accessToken, ...safeOrder } = order;
-  res.json({ ...safeOrder, upiUri: `upi://pay?pa=${encodeURIComponent(UPI_ID)}&pn=${encodeURIComponent(MERCHANT_NAME)}&am=${order.total}&cu=INR&tn=${encodeURIComponent('Order ' + order.id)}` });
+  res.json({ ...safeOrder, upiUri: upiPaymentUri(getSettings(db.data), order.total, order.id) });
 });
 
 // GET /api/orders/:id/track - live driver position and ETA for the customer

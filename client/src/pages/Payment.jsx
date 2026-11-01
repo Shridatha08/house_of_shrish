@@ -10,6 +10,15 @@ import { useAuth } from '../context/AuthContext';
 import { formatRupees } from '../gst';
 import { formatCountdown, isPaymentUrgent, paymentWindowClosed, timeLeftToPay } from '../paymentWindow';
 
+// The admin can change the receiving UPI ID, so show the one the QR pays.
+function upiPayee(upiUri) {
+  try {
+    return new URL(upiUri).searchParams.get('pa') || '';
+  } catch {
+    return '';
+  }
+}
+
 const WHATSAPP_LINK = 'https://wa.me/919180381854';
 
 export default function Payment() {
@@ -140,7 +149,7 @@ export default function Payment() {
           <p className="pay-divider">or scan</p>
           <div className="qr-card">
             <QRCodeSVG value={order.upiUri} size={220} marginSize={2} />
-            <p className="upi-id">Pay to: House of Shrish (houseofshrish@ybl)</p>
+            <p className="upi-id">Pay to: House of Shrish ({upiPayee(order.upiUri)})</p>
           </div>
           <button className="btn-primary" type="button" disabled={submitting} onClick={handleConfirmPaid}>
             {submitting ? 'Submitting...' : "I've completed the payment"}

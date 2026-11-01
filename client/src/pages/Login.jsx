@@ -4,6 +4,15 @@ import BackToMenu from '../components/BackToMenu';
 import { useAuth } from '../context/AuthContext';
 import { completePasswordReset, requestPasswordReset } from '../api';
 
+// Mirrors the server: 8+ characters with at least one letter and one number.
+const NEW_PASSWORD_RULES = {
+  minLength: 8,
+  maxLength: 128,
+  pattern: '(?=.*[A-Za-z])(?=.*\\d).{8,128}',
+  title: 'At least 8 characters, including a letter and a number',
+  autoComplete: 'new-password'
+};
+
 export default function Login() {
   const { login, register } = useAuth();
   const navigate = useNavigate();
@@ -125,11 +134,11 @@ export default function Login() {
                 </label>
                 <label>
                   New password
-                  <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} minLength={6} required />
+                  <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} {...NEW_PASSWORD_RULES} required />
                 </label>
                 <label>
                   Confirm new password
-                  <input type="password" value={confirmNewPassword} onChange={(e) => setConfirmNewPassword(e.target.value)} minLength={6} required />
+                  <input type="password" value={confirmNewPassword} onChange={(e) => setConfirmNewPassword(e.target.value)} {...NEW_PASSWORD_RULES} required />
                 </label>
                 <button className="btn-primary" type="submit" disabled={submitting}>
                   {submitting ? 'Please wait...' : 'Set new password'}
@@ -211,7 +220,7 @@ export default function Login() {
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              minLength={6}
+              {...(mode === 'register' ? NEW_PASSWORD_RULES : { autoComplete: 'current-password' })}
               required
             />
           </label>
@@ -222,7 +231,7 @@ export default function Login() {
                 type="password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
-                minLength={6}
+                {...NEW_PASSWORD_RULES}
                 required
               />
             </label>

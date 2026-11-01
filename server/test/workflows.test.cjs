@@ -142,14 +142,14 @@ async function purchase(app, itemId = 1, extra = {}) {
 
 const adminHeaders = { 'x-admin-key': 'test-admin' };
 
-test('login distinguishes unregistered users and incorrect passwords', async () => {
+test('login does not reveal whether a phone number has an account', async () => {
   const app = application();
   const missing = await app.request('post', '/api/auth/login', { phone: '9111111111', password: 'password' });
   assert.equal(missing.code, 401);
-  assert.equal(missing.body.error, 'User not registered. Please register first.');
   const incorrect = await app.request('post', '/api/auth/login', { phone: customer.phone, password: 'wrong' });
   assert.equal(incorrect.code, 401);
-  assert.equal(incorrect.body.error, 'Incorrect password. Please try again.');
+  assert.equal(missing.body.error, 'Wrong phone number or password.');
+  assert.deepEqual(incorrect.body, missing.body);
   assert.equal(app.state().sessions.length, 1);
   const success = await app.request('post', '/api/auth/login', { phone: customer.phone, password: 'password' });
   assert.equal(success.code, 200);
@@ -158,9 +158,9 @@ test('login distinguishes unregistered users and incorrect passwords', async () 
 
 test('registration and profile require, store, and return flat number and pincode', async () => {
   const app = application();
-  const invalid = await app.request('post', '/api/auth/register', { ...customer, phone: '9111111111', pincode: '123', password: 'password' });
+  const invalid = await app.request('post', '/api/auth/register', { ...customer, phone: '9111111111', pincode: '123', password: 'password1' });
   assert.equal(invalid.code, 400);
-  const registered = await app.request('post', '/api/auth/register', { ...customer, phone: '9111111111', password: 'password' });
+  const registered = await app.request('post', '/api/auth/register', { ...customer, phone: '9111111111', password: 'password1' });
   assert.equal(registered.code, 201);
   assert.equal(registered.body.user.flatNumber, 'A-12');
   assert.equal(registered.body.user.pincode, '560075');
@@ -371,12 +371,12 @@ test('reset keys are single-use, revoke sessions, and concurrent consumption can
   const app = application();
   await app.request('post', '/api/auth/password-reset/request', { phone: customer.phone });
   const issued = await app.request('post', '/api/admin/password-reset-requests/:id/issue-key', {}, { id: app.state().passwordResetRequests[0].id }, adminHeaders);
-  const payload = { phone: customer.phone, resetKey: issued.body.resetKey, password: 'new-password' };
+  const payload = { phone: customer.phone, resetKey: issued.body.resetKey, password: 'new-password-1' };
   const results = await Promise.all([app.request('post', '/api/auth/password-reset/complete', payload), app.request('post', '/api/auth/password-reset/complete', payload)]);
   assert.equal(results.filter((result) => result.code === 204).length, 1);
   assert.equal(app.state().sessions.length, 0);
   assert.equal((await app.request('post', '/api/auth/password-reset/complete', payload)).code, 400);
-  assert.equal(app.state().users[0].passwordHash, 'hashed:new-password');
+  assert.equal(app.state().users[0].passwordHash, 'hashed:new-password-1');
 });
 
 test('expired sessions cannot access profiles; logout revokes current token', async () => {
@@ -429,7 +429,7 @@ test('expired reset keys fail without changing a password', async () => {
   await app.request('post', '/api/auth/password-reset/request', { phone: customer.phone });
   const issued = await app.request('post', '/api/admin/password-reset-requests/:id/issue-key', {}, { id: app.state().passwordResetRequests[0].id }, adminHeaders);
   app.clock('2026-10-10T04:31:00Z');
-  const result = await app.request('post', '/api/auth/password-reset/complete', { phone: customer.phone, resetKey: issued.body.resetKey, password: 'new-password' });
+  const result = await app.request('post', '/api/auth/password-reset/complete', { phone: customer.phone, resetKey: issued.body.resetKey, password: 'new-password-1' });
   assert.equal(result.code, 400);
   assert.equal(app.state().users[0].passwordHash, 'hashed:password');
 });
@@ -816,7 +816,7 @@ test('guest orders notify the device bound to that order', async () => {
 
 test('delivery coordinates are optional, validated, and preserved', async () => {
   const app = application();
-  const account = { name: 'Geo', phone: '9123456780', password: 'secret1', address: 'Street', flatNumber: 'B-2', pincode: '560075' };
+  const account = { name: 'Geo', phone: '9123456780', password: 'secret12', address: 'Street', flatNumber: 'B-2', pincode: '560075' };
 
   assert.equal((await app.request('post', '/api/auth/register', { ...account, lat: 200, lng: 77 })).code, 400);
 
@@ -1966,7 +1966,7 @@ test('bad prices are refused', async () => {
 test('every customer gets a referral code built from their name', async () => {
   const app = application();
   const registered = await app.request('post', '/api/auth/register', {
-    ...customer, name: 'Eshwar Kumar', phone: '9111111111', password: 'password'
+    ...customer, name: 'Eshwar Kumar', phone: '9111111111', password: 'password1'
   });
   assert.equal(registered.code, 201);
   assert.match(registered.body.user.referralCode, /^ESHWAR\d{4}$/);
@@ -1994,7 +1994,7 @@ test('referral codes are unique even for identical names', async () => {
   const codes = new Set();
   for (let i = 0; i < 12; i++) {
     const registered = await app.request('post', '/api/auth/register', {
-      ...customer, name: 'Same Name', phone: `91111111${String(i).padStart(2, '0')}`, password: 'password'
+      ...customer, name: 'Same Name', phone: `91111111${String(i).padStart(2, '0')}`, password: 'password1'
     });
     codes.add(registered.body.user.referralCode);
   }
@@ -2004,14 +2004,14 @@ test('referral codes are unique even for identical names', async () => {
 test('a name with no usable letters still produces a code', async () => {
   const app = application();
   const registered = await app.request('post', '/api/auth/register', {
-    ...customer, name: '123 456', phone: '9222222222', password: 'password'
+    ...customer, name: '123 456', phone: '9222222222', password: 'password1'
   });
   assert.match(registered.body.user.referralCode, /^SHRISH\d{4}$/);
 });
 
 async function referredFriend(app, { code, phone = '9111111111' } = {}) {
   return app.request('post', '/api/auth/register', {
-    ...customer, name: 'Friend One', phone, password: 'password', referralCode: code
+    ...customer, name: 'Friend One', phone, password: 'password1', referralCode: code
   });
 }
 
@@ -2069,11 +2069,11 @@ test('a code has to exist, and cannot be your own', async () => {
   assert.equal(app.state().users.length, 1, 'the account is not created');
 
   const registered = await app.request('post', '/api/auth/register', {
-    ...customer, name: 'Solo', phone: '9333333333', password: 'password'
+    ...customer, name: 'Solo', phone: '9333333333', password: 'password1'
   });
   const own = registered.body.user.referralCode;
   const selfUse = await app.request('post', '/api/auth/register', {
-    ...customer, name: 'Solo Two', phone: '9444444444', password: 'password', referralCode: own
+    ...customer, name: 'Solo Two', phone: '9444444444', password: 'password1', referralCode: own
   });
   // Using someone else's code is fine; the guard is that it must resolve.
   assert.equal(selfUse.code, 201);
@@ -2246,7 +2246,7 @@ test('a referral missed at sign-up can be attached and settles at once', async (
 
   // Registered without the code, exactly as the live accounts were.
   const joined = await app.request('post', '/api/auth/register', {
-    ...customer, name: 'Abhishek', phone: '9111111111', password: 'password'
+    ...customer, name: 'Abhishek', phone: '9111111111', password: 'password1'
   });
   const token = { authorization: `Bearer ${joined.body.token}` };
   const friendId = joined.body.user.id;
@@ -2270,7 +2270,7 @@ test('attaching a referral before they order waits for the order', async () => {
   const app = application();
   const code = (await app.request('get', '/api/auth/me')).body.user.referralCode;
   const joined = await app.request('post', '/api/auth/register', {
-    ...customer, name: 'Abhishek', phone: '9111111111', password: 'password'
+    ...customer, name: 'Abhishek', phone: '9111111111', password: 'password1'
   });
   const token = { authorization: `Bearer ${joined.body.token}` };
 
@@ -2290,7 +2290,7 @@ test('a cancelled order does not count as having bought something', async () => 
   const app = application();
   const code = (await app.request('get', '/api/auth/me')).body.user.referralCode;
   const joined = await app.request('post', '/api/auth/register', {
-    ...customer, name: 'Abhishek', phone: '9111111111', password: 'password'
+    ...customer, name: 'Abhishek', phone: '9111111111', password: 'password1'
   });
   const token = { authorization: `Bearer ${joined.body.token}` };
 
@@ -2309,7 +2309,7 @@ test('attaching a referral is guarded against the obvious abuses', async () => {
   const app = application();
   const mine = (await app.request('get', '/api/auth/me')).body.user;
   const other = await app.request('post', '/api/auth/register', {
-    ...customer, name: 'Abhishek', phone: '9111111111', password: 'password'
+    ...customer, name: 'Abhishek', phone: '9111111111', password: 'password1'
   });
   const link = (id, referralCode, headers = adminHeaders) =>
     app.request('post', '/api/admin/users/:id/referrer', { referralCode }, { id: String(id) }, headers);
@@ -2336,7 +2336,7 @@ test('signup tells the app whether the referral code was actually applied', asyn
 test('signup without a referral code reports nothing applied', async () => {
   const app = application();
   const plain = await app.request('post', '/api/auth/register', {
-    ...customer, name: 'No Referrer', phone: '9000000123', password: 'password'
+    ...customer, name: 'No Referrer', phone: '9000000123', password: 'password1'
   });
   assert.equal(plain.code, 201);
   assert.equal(plain.body.referralApplied, false);
@@ -2532,6 +2532,13 @@ test('a long note is trimmed in the push but kept whole in the inbox', async () 
 
 const youpiEnv = { YOUPI_API_URL: 'https://pay.example.test/', YOUPI_WEBHOOK_SECRET: 'whsec-test', YOUPI_MERCHANT_ID: 'merchant-1' };
 
+// The gateway is configured and the admin has switched online payment on.
+function youpiFixture() {
+  const data = fixture();
+  data.settings.onlinePaymentEnabled = true;
+  return data;
+}
+
 function youpiGateway(response = {}) {
   const calls = [];
   let counter = 0;
@@ -2544,14 +2551,21 @@ function youpiGateway(response = {}) {
   return { fetch, calls };
 }
 
-function signedWebhook(payload, secret = youpiEnv.YOUPI_WEBHOOK_SECRET) {
+// Mirrors YouPI V2: the V2 signature covers "<timestamp>.<raw body>".
+function signedWebhook(payload, secret = youpiEnv.YOUPI_WEBHOOK_SECRET, timestamp = new Date(now).getTime()) {
   const raw = Buffer.from(JSON.stringify(payload));
-  const signature = 'sha256=' + crypto.createHmac('sha256', secret).update(raw).digest('hex');
-  return [raw, { 'x-gateway-signature': signature, 'x-gateway-event': payload.event }];
+  const sign = (bytes) => 'sha256=' + crypto.createHmac('sha256', secret).update(bytes).digest('hex');
+  return [raw, {
+    'x-gateway-signature': sign(raw),
+    'x-gateway-signature-v2': sign(Buffer.concat([Buffer.from(`${timestamp}.`), raw])),
+    'x-gateway-timestamp': String(timestamp),
+    'x-gateway-event': payload.event,
+    ...(payload.deliveryId ? { 'x-gateway-delivery-id': payload.deliveryId } : {})
+  }];
 }
 
 async function youpiOrder(gateway = youpiGateway()) {
-  const app = application(fixture(), { env: youpiEnv, fetch: gateway.fetch });
+  const app = application(youpiFixture(), { env: youpiEnv, fetch: gateway.fetch });
   const created = await purchase(app);
   const id = created.body.order.id;
   const started = await app.request('post', '/api/orders/:id/online-payment', {}, { id });
@@ -2559,7 +2573,7 @@ async function youpiOrder(gateway = youpiGateway()) {
 }
 
 function successPayload(id, overrides = {}) {
-  return { event: 'SUCCESS', paymentId: 'pay-1', orderId: `HOS-${id}`, amount: '136.00', amountPaise: 13600, method: 'UPI', utr: '123456789012', verificationLevel: 1, ...overrides };
+  return { event: 'OBSERVED_SUCCESS', settlementState: 'NOT_RECONCILED', paymentId: 'pay-1', orderId: `HOS-${id}`, amount: '136.00', amountPaise: 13600, method: 'UPI', utr: '123456789012', verificationLevel: 1, ...overrides };
 }
 
 test('online payment stays off until the gateway is configured', async () => {
@@ -2581,7 +2595,8 @@ test('starting online payment opens a gateway session for the exact order total'
   assert.equal(started.body.checkoutUrl, 'https://pay.example.test/checkout/pay-1');
   const [call] = gateway.calls;
   assert.equal(call.url, 'https://pay.example.test/api/v1/payments');
-  assert.equal(call.init.headers['X-Merchant-Key'], 'whsec-test');
+  // The webhook secret never leaves this server.
+  assert.equal(call.init.headers['X-Merchant-Key'], undefined);
   assert.equal(call.init.headers['X-Merchant-Id'], 'merchant-1');
   assert.equal(call.body.orderId, `HOS-${id}`);
   assert.equal(call.body.amount, '136.00');
@@ -2595,7 +2610,7 @@ test('starting online payment opens a gateway session for the exact order total'
 
 test('online payment needs order access and an order that is still payable', async () => {
   const gateway = youpiGateway();
-  const app = application(fixture(), { env: youpiEnv, fetch: gateway.fetch });
+  const app = application(youpiFixture(), { env: youpiEnv, fetch: gateway.fetch });
   const guest = await app.request('post', '/api/orders', { items: [{ id: 6, quantity: 1, customisation: '100g' }], customer }, {}, {});
   const id = guest.body.order.id;
   assert.equal((await app.request('post', '/api/orders/:id/online-payment', {}, { id }, {})).code, 403);
@@ -2612,7 +2627,7 @@ test('a gateway failure or unsafe checkout URL falls back to the QR', async () =
   assert.equal(unsafe.started.code, 502);
 });
 
-test('a signed success moves the order to admin review with the UTR, once', async () => {
+test('a signed observation moves the order to admin review with the UTR, once', async () => {
   const { app, id } = await youpiOrder();
   const [raw, headers] = signedWebhook(successPayload(id));
   const delivered = await app.request('post', '/api/payments/youpi/webhook', raw, {}, headers);
@@ -2621,6 +2636,7 @@ test('a signed success moves the order to admin review with the UTR, once', asyn
   assert.equal(order.status, 'payment_review');
   assert.equal(order.paymentStatus, 'awaiting_verification');
   assert.equal(order.youpi.utr, '123456789012');
+  assert.equal(order.youpi.status, 'OBSERVED');
   assert.equal(app.notifications.at(-1).title, 'UPI payment received');
   assert.match(app.notifications.at(-1).body, /UTR 123456789012/);
   // Still needs the admin before invoices or fulfilment.
@@ -2642,7 +2658,12 @@ test('webhooks with a bad signature, wrong session, or non-UPI method change not
   assert.equal(forged.code, 401);
   const [otherSecret, otherHeaders] = signedWebhook(successPayload(id), 'not-the-secret');
   assert.equal((await app.request('post', '/api/payments/youpi/webhook', otherSecret, {}, otherHeaders)).code, 401);
-  for (const overrides of [{ paymentId: 'pay-unknown' }, { method: 'COD' }, { event: 'EXPIRED' }, { orderId: '1' }]) {
+  for (const overrides of [
+    { paymentId: 'pay-unknown' }, { method: 'COD' }, { event: 'EXPIRED' }, { orderId: '1' },
+    // V2 reports cash and counter orders as SUCCESS; that is not money received.
+    { event: 'SUCCESS', method: 'COD' }, { event: 'SUCCESS' },
+    { event: 'RECONCILED', settlementState: 'NOT_RECONCILED' }
+  ]) {
     const [body, headers] = signedWebhook(successPayload(id, overrides));
     const result = await app.request('post', '/api/payments/youpi/webhook', body, {}, headers);
     assert.equal(result.code, 200);
@@ -2683,6 +2704,170 @@ test('a success without a UTR is still recorded only once', async () => {
   const replayed = await app.request('post', '/api/payments/youpi/webhook', raw, {}, headers);
   assert.equal(replayed.body.duplicate, true);
   assert.equal(app.notifications.length, before);
+});
+
+test('online payment stays off without a merchant ID', async () => {
+  const app = application(youpiFixture(), { env: { ...youpiEnv, YOUPI_MERCHANT_ID: '' }, fetch: youpiGateway().fetch });
+  assert.equal((await app.request('get', '/api/store-config')).body.onlinePayment, false);
+});
+
+test('only a fresh V2 signature is accepted', async () => {
+  const { app, id } = await youpiOrder();
+  const payload = successPayload(id);
+  const [raw, headers] = signedWebhook(payload);
+  // A V1-only delivery has no timestamp binding, so it could be a replay.
+  const v1Only = { 'x-gateway-signature': headers['x-gateway-signature'] };
+  assert.equal((await app.request('post', '/api/payments/youpi/webhook', raw, {}, v1Only)).code, 401);
+  const moved = { ...headers, 'x-gateway-timestamp': String(Number(headers['x-gateway-timestamp']) + 1) };
+  assert.equal((await app.request('post', '/api/payments/youpi/webhook', raw, {}, moved)).code, 401);
+  const [staleRaw, staleHeaders] = signedWebhook(payload, undefined, new Date(now).getTime() - 3 * 60 * 60 * 1000);
+  assert.equal((await app.request('post', '/api/payments/youpi/webhook', staleRaw, {}, staleHeaders)).code, 401);
+  assert.equal(app.state().orders[0].status, 'pending_payment');
+  // The gateway retries for up to an hour with the original timestamp.
+  const [retriedRaw, retriedHeaders] = signedWebhook(payload, undefined, new Date(now).getTime() - 60 * 60 * 1000);
+  assert.equal((await app.request('post', '/api/payments/youpi/webhook', retriedRaw, {}, retriedHeaders)).code, 200);
+  assert.equal(app.state().orders[0].status, 'payment_review');
+});
+
+test('a bank reconciliation after an observation is recorded and announced once', async () => {
+  const { app, id } = await youpiOrder();
+  const [observed, observedHeaders] = signedWebhook(successPayload(id, { deliveryId: 'd-1' }));
+  await app.request('post', '/api/payments/youpi/webhook', observed, {}, observedHeaders);
+  const [raw, headers] = signedWebhook(successPayload(id, { event: 'RECONCILED', settlementState: 'RECONCILED', deliveryId: 'd-2' }));
+  assert.equal((await app.request('post', '/api/payments/youpi/webhook', raw, {}, headers)).code, 200);
+  const order = app.state().orders[0];
+  assert.equal(order.status, 'payment_review');
+  assert.equal(order.youpi.status, 'RECONCILED');
+  assert.ok(order.youpi.reconciledAt);
+  assert.equal(app.notifications.at(-1).title, 'UPI payment reconciled');
+  assert.match(app.notifications.at(-1).body, /safe to approve/);
+  const before = app.notifications.length;
+  assert.equal((await app.request('post', '/api/payments/youpi/webhook', raw, {}, headers)).body.duplicate, true);
+  // A late observation cannot downgrade a reconciled payment.
+  const [late, lateHeaders] = signedWebhook(successPayload(id, { deliveryId: 'd-3' }));
+  assert.equal((await app.request('post', '/api/payments/youpi/webhook', late, {}, lateHeaders)).body.duplicate, true);
+  assert.equal(app.state().orders[0].youpi.status, 'RECONCILED');
+  assert.equal(app.notifications.length, before);
+});
+
+test('a reconciliation without an earlier observation still waits for the admin', async () => {
+  const { app, id } = await youpiOrder();
+  const [raw, headers] = signedWebhook(successPayload(id, { event: 'RECONCILED', settlementState: 'RECONCILED' }));
+  await app.request('post', '/api/payments/youpi/webhook', raw, {}, headers);
+  const order = app.state().orders[0];
+  assert.equal(order.status, 'payment_review');
+  assert.equal(order.paymentStatus, 'awaiting_verification');
+  assert.equal(order.youpi.status, 'RECONCILED');
+  assert.equal(app.notifications.at(-1).title, 'UPI payment received');
+  assert.match(app.notifications.at(-1).body, /bank statement/);
+});
+
+test('a manual-review outcome alerts the admin without touching the order', async () => {
+  const { app, id } = await youpiOrder();
+  const [raw, headers] = signedWebhook(successPayload(id, { event: 'MANUAL_REVIEW', deliveryId: 'd-1' }));
+  const result = await app.request('post', '/api/payments/youpi/webhook', raw, {}, headers);
+  assert.equal(result.body.manualReview, true);
+  const order = app.state().orders[0];
+  assert.equal(order.status, 'pending_payment');
+  assert.equal(order.youpi.utr, undefined);
+  assert.equal(order.youpi.manualReview.utr, '123456789012');
+  assert.equal(app.notifications.at(-1).title, 'UPI payment needs manual review');
+  const before = app.notifications.length;
+  assert.equal((await app.request('post', '/api/payments/youpi/webhook', raw, {}, headers)).body.duplicate, true);
+  assert.equal(app.notifications.length, before);
+});
+
+test('a correct payment after an amount mismatch still reaches the admin', async () => {
+  const { app, id } = await youpiOrder();
+  const [wrong, wrongHeaders] = signedWebhook(successPayload(id, { amount: '1.00', amountPaise: 100 }));
+  await app.request('post', '/api/payments/youpi/webhook', wrong, {}, wrongHeaders);
+  const before = app.notifications.length;
+  assert.equal((await app.request('post', '/api/payments/youpi/webhook', wrong, {}, wrongHeaders)).body.duplicate, true);
+  assert.equal(app.notifications.length, before);
+  // The statement shows the full amount after the alert was misread.
+  const [raw, headers] = signedWebhook(successPayload(id, { event: 'RECONCILED', settlementState: 'RECONCILED' }));
+  await app.request('post', '/api/payments/youpi/webhook', raw, {}, headers);
+  const order = app.state().orders[0];
+  assert.equal(order.status, 'payment_review');
+  assert.equal(order.youpi.status, 'RECONCILED');
+  assert.equal(order.youpi.mismatch.amountPaise, 100);
+  assert.equal(app.notifications.at(-1).title, 'UPI payment received');
+});
+
+test('online payment stays off until the admin switches it on', async () => {
+  const gateway = youpiGateway();
+  const app = application(fixture(), { env: youpiEnv, fetch: gateway.fetch });
+  assert.equal((await app.request('get', '/api/store-config')).body.onlinePayment, false);
+  const settings = await app.request('get', '/api/admin/settings', {}, {}, adminHeaders);
+  assert.equal(settings.body.onlinePaymentEnabled, false);
+  assert.equal(settings.body.onlinePaymentAvailable, true);
+  const created = await purchase(app);
+  const id = created.body.order.id;
+  assert.equal((await app.request('post', '/api/orders/:id/online-payment', {}, { id })).code, 404);
+  assert.equal(gateway.calls.length, 0);
+
+  const saved = await app.request('patch', '/api/admin/settings', { subscriptionWorkingDays: 2, onlinePaymentEnabled: true }, {}, adminHeaders);
+  assert.equal(saved.code, 200);
+  assert.equal(saved.body.onlinePaymentEnabled, true);
+  assert.equal((await app.request('get', '/api/store-config')).body.onlinePayment, true);
+  assert.equal((await app.request('post', '/api/orders/:id/online-payment', {}, { id })).code, 200);
+
+  // Switching off stops new sessions but still accepts the one already open.
+  await app.request('patch', '/api/admin/settings', { subscriptionWorkingDays: 2, onlinePaymentEnabled: false }, {}, adminHeaders);
+  assert.equal((await app.request('get', '/api/store-config')).body.onlinePayment, false);
+  assert.equal((await app.request('post', '/api/orders/:id/online-payment', {}, { id })).code, 404);
+  const [raw, headers] = signedWebhook(successPayload(id));
+  assert.equal((await app.request('post', '/api/payments/youpi/webhook', raw, {}, headers)).code, 200);
+  assert.equal(app.state().orders[0].status, 'payment_review');
+});
+
+test('online payment cannot be switched on without a configured gateway', async () => {
+  const app = application();
+  const settings = await app.request('get', '/api/admin/settings', {}, {}, adminHeaders);
+  assert.equal(settings.body.onlinePaymentAvailable, false);
+  const refused = await app.request('patch', '/api/admin/settings', { subscriptionWorkingDays: 2, onlinePaymentEnabled: true }, {}, adminHeaders);
+  assert.equal(refused.code, 400);
+  assert.match(refused.body.error, /not configured/);
+  assert.equal(app.state().settings.onlinePaymentEnabled, undefined);
+  // Saving everything else still works with the switch left off.
+  assert.equal((await app.request('patch', '/api/admin/settings', { subscriptionWorkingDays: 3, onlinePaymentEnabled: false }, {}, adminHeaders)).code, 200);
+});
+
+test('the admin can change the UPI ID customers pay to', async () => {
+  const app = application();
+  assert.equal((await app.request('get', '/api/store-config')).body.upiId, 'houseofshrish@ybl');
+  assert.equal((await app.request('get', '/api/admin/settings', {}, {}, adminHeaders)).body.upiId, 'houseofshrish@ybl');
+  const first = await purchase(app);
+  assert.match(first.body.upiUri, /pa=houseofshrish%40ybl/);
+
+  for (const upiId of ['', 'no-handle', 'a@', '@ybl', 'two@@ybl', 'space in@ybl', 'x@1bank']) {
+    const result = await app.request('patch', '/api/admin/settings', { subscriptionWorkingDays: 2, upiId }, {}, adminHeaders);
+    assert.equal(result.code, 400, upiId);
+  }
+  assert.equal(app.state().settings.upiId, undefined);
+
+  const saved = await app.request('patch', '/api/admin/settings', { subscriptionWorkingDays: 2, upiId: '  kitchen.payments@okhdfcbank ' }, {}, adminHeaders);
+  assert.equal(saved.code, 200);
+  assert.equal(saved.body.upiId, 'kitchen.payments@okhdfcbank');
+  assert.equal((await app.request('get', '/api/store-config')).body.upiId, 'kitchen.payments@okhdfcbank');
+  const second = await purchase(app);
+  assert.match(second.body.upiUri, /pa=kitchen.payments%40okhdfcbank/);
+  // An unpaid order reopened later shows the current ID too.
+  const reopened = await app.request('get', '/api/orders/:id', {}, { id: first.body.order.id });
+  assert.match(reopened.body.upiUri, /pa=kitchen.payments%40okhdfcbank/);
+  // Other settings saves leave the UPI ID alone.
+  await app.request('patch', '/api/admin/settings', { subscriptionWorkingDays: 4 }, {}, adminHeaders);
+  assert.equal(app.state().settings.upiId, 'kitchen.payments@okhdfcbank');
+});
+
+test('customer passwords need eight characters with a letter and a number', async () => {
+  const app = application();
+  const attempt = (password) => app.request('post', '/api/auth/register', { ...customer, phone: '9555555555', password });
+  for (const weak of ['short1', 'password', '12345678', 'x'.repeat(127) + '1' + 'y']) {
+    assert.equal((await attempt(weak)).code, 400, weak);
+  }
+  assert.match((await attempt('password')).body.error, /letter and one number/);
+  assert.equal((await attempt('ladoo2026')).code, 201);
 });
 
 async function sweep(app) {
