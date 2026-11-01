@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getMenu, getStoreConfig } from '../api';
 import { useCart } from '../context/CartContext';
+import PromoMarquee from '../components/PromoMarquee';
 import fssaiLogo from '../../../fssai.png';
 import mealsImg from '../../../meals.png';
 import ladooImg from '../../../ladoo.png';
@@ -110,24 +111,7 @@ export default function Menu() {
 
   return (
     <div className="menu-page">
-      <section className="hero">
-        <h1>Home-style Pure Veg Meals, Delivered Fresh</h1>
-        <p>Wholesome thalis, monthly meal plans &amp; handcrafted dry fruits ladoo — made with care, served with love.</p>
-        <div className="hero-stats">
-          <div className="hero-stat">
-            <strong>100%</strong>
-            <span>Pure Veg</span>
-          </div>
-          <div className="hero-stat">
-            <strong>Bio-degradable</strong>
-            <span>Packaging</span>
-          </div>
-          <div className="hero-stat">
-            <strong>Fresh</strong>
-            <span>Made Daily</span>
-          </div>
-        </div>
-      </section>
+      <PromoMarquee />
 
       {storeConfig.announcement && <div className="announcement-banner">{storeConfig.announcement}</div>}
       {storeConfig.orderingPaused && <div className="announcement-banner">Ordering is temporarily paused.</div>}

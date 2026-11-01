@@ -67,49 +67,67 @@
   color: #c0392b;
 }
 
-.hero {
-  text-align: center;
-  background: linear-gradient(135deg, #ff8a50, #e8552d);
-  color: #fff;
-  border-radius: 20px;
-  padding: 36px 24px;
-  margin-bottom: 28px;
+.promo-marquee {
+  --promo-card-width: min(84vw, 240px);
+  margin: 0 -16px 24px;
 }
 
-.hero h1 {
-  color: #fff;
-  font-size: 1.6rem;
-  margin: 0 0 10px;
+.promo-marquee-viewport {
+  position: relative;
+  overflow-x: auto;
+  scroll-behavior: smooth;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
 }
 
-.hero p {
-  color: rgba(255, 255, 255, 0.92);
-  max-width: 520px;
-  margin: 0 auto;
-  font-size: 0.95rem;
+.promo-marquee-viewport::-webkit-scrollbar {
+  display: none;
 }
 
-.hero-stats {
+.promo-marquee-track {
+  display: flex;
+  width: max-content;
+  gap: 14px;
+  padding: 4px max(12px, calc((100% - var(--promo-card-width)) / 2));
+}
+
+.promo-marquee-card {
+  flex: 0 0 var(--promo-card-width);
+  scroll-snap-align: center;
+}
+
+.promo-marquee-card img {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 9 / 16;
+  object-fit: cover;
+  border-radius: 16px;
+  box-shadow: 0 6px 22px rgba(34, 28, 16, 0.16);
+}
+
+.promo-marquee-dots {
   display: flex;
   justify-content: center;
-  gap: 28px;
-  margin-top: 22px;
-  flex-wrap: wrap;
+  gap: 8px;
+  padding: 14px 0 0;
 }
 
-.hero-stat {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+.promo-marquee-dots button {
+  width: 8px;
+  height: 8px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: #d3c8ae;
+  cursor: pointer;
+  transition: width 0.2s ease, background-color 0.2s ease;
 }
 
-.hero-stat strong {
-  font-size: 1.05rem;
-}
-
-.hero-stat span {
-  font-size: 0.75rem;
-  color: rgba(255, 255, 255, 0.85);
+.promo-marquee-dots button.active {
+  width: 24px;
+  background: #9c793a;
 }
 
 .menu-category h2 {
@@ -1975,40 +1993,8 @@ button.subscription-calendar-day:disabled {
     padding: 16px 14px 96px;
   }
 
-  .hero {
-    padding: 26px 18px;
-    border-radius: 16px;
-    margin-bottom: 20px;
-  }
-
-  .hero h1 {
-    font-size: 1.3rem;
-  }
-
-  .hero p {
-    font-size: 0.88rem;
-  }
-
-  .hero-stats {
-    gap: 10px;
-    margin-top: 18px;
-  }
-
-  /* Equal columns, and the longest label kept on one line, so the three
-     stats sit on a single tidy row. */
-  .hero-stat {
-    flex: 1 1 0;
-    min-width: 0;
-  }
-
-  .hero-stat strong {
-    font-size: 0.76rem;
-    white-space: nowrap;
-  }
-
-  .hero-stat span {
-    font-size: 0.62rem;
-    text-align: center;
+  .promo-marquee {
+    margin-inline: -14px;
   }
 
   .cart-bar {
