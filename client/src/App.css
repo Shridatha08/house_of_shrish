@@ -176,7 +176,7 @@
 }
 
 .category-banner-ladoo {
-  height: 200px;
+  height: clamp(80px, 22.94vw, 250px);
   max-height: none;
 }
 
