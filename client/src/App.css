@@ -1111,6 +1111,76 @@ button.subscription-calendar-day:disabled {
   gap: 5px;
 }
 
+.subscription-range-skip {
+  display: grid;
+  gap: 12px;
+  max-width: 520px;
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid #e9d8c8;
+  border-radius: 12px;
+  background: #fffaf6;
+}
+
+.subscription-range-skip h4,
+.subscription-range-skip p {
+  margin: 0;
+}
+
+.subscription-range-skip > label,
+.subscription-range-dates label {
+  display: grid;
+  gap: 5px;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.subscription-range-skip select,
+.subscription-range-skip input[type="date"] {
+  min-width: 0;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid #d9d3cd;
+  border-radius: 8px;
+  background: #fff;
+  font: inherit;
+}
+
+.subscription-range-dates {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.subscription-range-meals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  margin: 0;
+  padding: 8px 10px 10px;
+  border: 1px solid #e9e5e1;
+  border-radius: 8px;
+}
+
+.subscription-range-meals legend {
+  padding: 0 4px;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.subscription-range-meals label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+}
+
+.subscription-range-skip > p {
+  color: #777;
+  font-size: 0.74rem;
+  line-height: 1.4;
+}
+
 .meal-list-heading {
   display: flex;
   align-items: baseline;

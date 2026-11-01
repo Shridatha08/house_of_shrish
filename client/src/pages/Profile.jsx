@@ -12,7 +12,7 @@ import FeedbackPanel from '../components/FeedbackPanel';
 import { formatMealDate, mealLabel, mealKey, planSummary } from '../schedule';
 import { orderStatusText } from '../paymentWindow';
 import { formatRupees } from '../gst';
-import { updateProfile, getMySubscriptions, getMyOrders, cancelOrder, requestRefund, skipSubscriptionMeal, deleteAccount, getWallet, getStoreConfig } from '../api';
+import { updateProfile, getMySubscriptions, getMyOrders, cancelOrder, requestRefund, skipSubscriptionMeal, skipSubscriptionRange, deleteAccount, getWallet, getStoreConfig } from '../api';
 
 export default function Profile() {
   const { user, token, ready, updateUser, clearSession, logout } = useAuth();
@@ -131,6 +131,25 @@ export default function Profile() {
     }
   }
 
+  async function handleSkipRange(subscription, fromDate, toDate, meals) {
+    const mealNames = meals.map(mealLabel).join(' and ');
+    if (!window.confirm(`Skip ${mealNames} from ${formatMealDate(fromDate)} through ${formatMealDate(toDate)}? Only scheduled delivery days are skipped, and each meal is carried forward.`)) return;
+    setSkipError('');
+    setSkippingMealKey(`range:${subscription.id}`);
+    try {
+      const updated = await skipSubscriptionRange(
+        subscription.id,
+        { fromDate, toDate, meals },
+        token
+      );
+      setSubscriptions((previous) => previous.map((entry) => entry.id === updated.id ? updated : entry));
+    } catch (err) {
+      setSkipError(err.message);
+    } finally {
+      setSkippingMealKey('');
+    }
+  }
+
   if (ready && !user) {
     return <Navigate to="/login?redirect=/profile" replace />;
   }
@@ -237,6 +256,7 @@ export default function Profile() {
             <MealPlanPanel
               subscriptions={subscriptions}
               onSkip={handleSkipMeal}
+              onSkipRange={handleSkipRange}
               skippingMealKey={skippingMealKey}
               skipError={skipError}
             />

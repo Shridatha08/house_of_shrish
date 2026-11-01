@@ -115,6 +115,13 @@ export const skipSubscriptionMeal = (subscriptionId, payload, token) =>
     headers: authHeaders(token)
   });
 
+export const skipSubscriptionRange = (subscriptionId, payload, token) =>
+  request(`/api/subscriptions/${subscriptionId}/skip-range`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+    headers: authHeaders(token)
+  });
+
 export const getAdminSettings = (adminKey) =>
   request('/api/admin/settings', { headers: { 'x-admin-key': adminKey } });
 

@@ -1834,6 +1834,76 @@ app.post('/api/subscriptions/:id/skip', async (req, res) => {
   res.json({ ...subscription, ...projectedSchedule });
 });
 
+// POST /api/subscriptions/:id/skip-range - skip selected meals across a date range
+app.post('/api/subscriptions/:id/skip-range', async (req, res) => {
+  const db = await getDb();
+  const user = await getUserFromToken(db, req);
+  if (!user) return res.status(401).json({ error: 'Not signed in.' });
+
+  const subscription = db.data.subscriptions.find((entry) => entry.id === req.params.id && entry.userId === user.id);
+  if (!subscription || !subscription.approved) return res.status(404).json({ error: 'Active subscription not found.' });
+
+  const { fromDate, toDate, meals } = req.body || {};
+  if (!isValidDateString(fromDate) || !isValidDateString(toDate) || fromDate > toDate ||
+      !Array.isArray(meals) || meals.length === 0 ||
+      meals.some((meal) => !['lunch', 'dinner'].includes(meal)) ||
+      new Set(meals).size !== meals.length) {
+    return res.status(400).json({ error: 'Choose a valid date range and at least one meal to skip.' });
+  }
+
+  const schedule = buildSubscriptionSchedule(subscription, subscriptionHolidays(db.data));
+  if (schedule.mealsBeyondDeadline > 0) {
+    return res.status(409).json({ error: 'Cannot be carry forwarded beyond this date' });
+  }
+  if (meals.some((meal) => !schedule.mealSlots.includes(meal))) {
+    return res.status(400).json({ error: 'Choose meals included in this subscription.' });
+  }
+  if (fromDate < todayISTStr()) {
+    return res.status(400).json({ error: 'The date range cannot include past dates.' });
+  }
+  if (toDate > schedule.carryForwardDeadline) {
+    return res.status(409).json({ error: 'Cannot be carry forwarded beyond this date' });
+  }
+
+  const selectedMeals = schedule.schedule.filter((entry) =>
+    entry.date >= fromDate && entry.date <= toDate && meals.includes(entry.meal)
+  );
+  if (selectedMeals.length === 0) {
+    return res.status(409).json({ error: 'No scheduled meals are available to skip in this date range.' });
+  }
+  if (selectedMeals.some((entry) => entry.status !== 'upcoming' || !entry.canCancel)) {
+    return res.status(409).json({ error: 'Every selected meal in this range must still be available to skip.' });
+  }
+
+  const cancelledAt = new Date().toISOString();
+  const skippedMeals = [
+    ...(subscription.skippedMeals || []),
+    ...selectedMeals.map(({ date, meal }) => ({ date, meal, cancelledAt }))
+  ];
+  const projectedSchedule = buildSubscriptionSchedule({ ...subscription, skippedMeals }, subscriptionHolidays(db.data));
+  if (projectedSchedule.mealsBeyondDeadline > 0) {
+    return res.status(409).json({ error: 'Cannot be carry forwarded beyond this date' });
+  }
+
+  subscription.skippedMeals = skippedMeals;
+  await db.write();
+
+  const today = todayISTStr();
+  const skippedToday = selectedMeals.filter((entry) => entry.date === today);
+  if (skippedToday.length > 0) {
+    const customer = db.data.users.find((entry) => entry.id === subscription.userId);
+    for (const entry of skippedToday) {
+      await notifyAdmins(db, {
+        title: 'Meal skipped today',
+        body: `${customer?.name || 'A customer'} skipped ${entry.meal} for today (${subscription.itemName}).`,
+        data: { type: 'meal_skipped', subscriptionId: subscription.id, date: entry.date, meal: entry.meal }
+      });
+    }
+  }
+
+  res.json({ ...subscription, ...projectedSchedule });
+});
+
 // GET /api/admin/subscriptions - list every user's Monthly subscriptions (requires admin key)
 app.get('/api/admin/subscriptions', async (req, res) => {
   if (req.headers['x-admin-key'] !== ADMIN_KEY) {

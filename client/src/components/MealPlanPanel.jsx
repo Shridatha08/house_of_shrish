@@ -3,12 +3,24 @@ import { statusOf, mealLabel, formatMealDate, skipAvailability, mealKey, schedul
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
+function todayInIndia() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
+
 // The grid is a glance, the list below is where skipping happens. Earlier both
 // lived in the calendar cell, which left a 0.56rem Skip link on phones.
-export default function MealPlanPanel({ subscriptions, onSkip, skippingMealKey, skipError, today }) {
+export default function MealPlanPanel({ subscriptions, onSkip, onSkipRange, skippingMealKey, skipError, today }) {
   const [month, setMonth] = useState(() => new Date());
   const [selectedDate, setSelectedDate] = useState('');
   const [showAll, setShowAll] = useState(false);
+  const [rangeSubscriptionId, setRangeSubscriptionId] = useState(
+    () => subscriptions.find((subscription) => subscription.approved)?.id || ''
+  );
+  const [rangeFrom, setRangeFrom] = useState(todayInIndia);
+  const [rangeTo, setRangeTo] = useState(todayInIndia);
+  const [rangeMeals, setRangeMeals] = useState(
+    () => subscriptions.find((subscription) => subscription.approved)?.mealSlots || []
+  );
 
   const year = month.getFullYear();
   const monthIndex = month.getMonth();
@@ -25,6 +37,17 @@ export default function MealPlanPanel({ subscriptions, onSkip, skippingMealKey, 
   const byDate = scheduleByDate(subscriptions);
   const { days: upcomingDays, meals: upcomingMeals } = upcomingTotals(subscriptions);
   const todayKey = today || new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const rangeSubscriptions = subscriptions.filter((subscription) =>
+    subscription.approved &&
+    Number(subscription.mealsBeyondDeadline || 0) === 0 &&
+    (subscription.schedule || []).some((entry) => entry.status === 'upcoming') &&
+    (subscription.carryForwardDeadline || subscription.endDate || '') >= todayKey
+  );
+  const selectedRangeSubscription = rangeSubscriptions.find(
+    (subscription) => subscription.id === rangeSubscriptionId
+  ) || rangeSubscriptions[0];
+  const rangeBusy = selectedRangeSubscription &&
+    skippingMealKey === `range:${selectedRangeSubscription.id}`;
 
   // The short window only means anything while looking at the month today is
   // in; paging back to September has to list September.
@@ -97,6 +120,91 @@ export default function MealPlanPanel({ subscriptions, onSkip, skippingMealKey, 
           </span>
         ))}
       </div>
+
+      {selectedRangeSubscription && (
+        <form
+          className="subscription-range-skip"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (rangeFrom && rangeTo && rangeFrom <= rangeTo && rangeMeals.length) {
+              onSkipRange(selectedRangeSubscription, rangeFrom, rangeTo, rangeMeals);
+            }
+          }}
+        >
+          <h4>Skip a date range</h4>
+          <label>
+            Subscription
+            <select
+              value={selectedRangeSubscription.id}
+              onChange={(event) => {
+                const nextSubscription = rangeSubscriptions.find(
+                  (subscription) => subscription.id === event.target.value
+                );
+                setRangeSubscriptionId(event.target.value);
+                setRangeMeals(nextSubscription?.mealSlots || []);
+                setRangeFrom(todayKey);
+                setRangeTo(todayKey);
+              }}
+            >
+              {rangeSubscriptions.map((subscription) => (
+                <option key={subscription.id} value={subscription.id}>{subscription.itemName}</option>
+              ))}
+            </select>
+          </label>
+          <div className="subscription-range-dates">
+            <label>
+              From
+              <input
+                type="date"
+                min={todayKey}
+                max={selectedRangeSubscription.carryForwardDeadline || selectedRangeSubscription.endDate}
+                value={rangeFrom}
+                onChange={(event) => {
+                  setRangeFrom(event.target.value);
+                  if (event.target.value > rangeTo) setRangeTo(event.target.value);
+                }}
+                required
+              />
+            </label>
+            <label>
+              To
+              <input
+                type="date"
+                min={rangeFrom || todayKey}
+                max={selectedRangeSubscription.carryForwardDeadline || selectedRangeSubscription.endDate}
+                value={rangeTo}
+                onChange={(event) => setRangeTo(event.target.value)}
+                required
+              />
+            </label>
+          </div>
+          <fieldset className="subscription-range-meals">
+            <legend>Meals to skip</legend>
+            {selectedRangeSubscription.mealSlots.map((meal) => (
+              <label key={meal}>
+                <input
+                  type="checkbox"
+                  checked={rangeMeals.includes(meal)}
+                  onChange={(event) => setRangeMeals((current) =>
+                    event.target.checked
+                      ? [...current, meal]
+                      : current.filter((entry) => entry !== meal)
+                  )}
+                />
+                {mealLabel(meal)}
+              </label>
+            ))}
+          </fieldset>
+          <button
+            type="submit"
+            className="btn-add"
+            disabled={rangeBusy || !rangeFrom || !rangeTo || rangeFrom > rangeTo || !rangeMeals.length}
+          >
+            {rangeBusy ? 'Skipping…' : 'Skip selected meals'}
+          </button>
+          <p>Skips scheduled delivery days in this range. Sundays and kitchen holidays are excluded.</p>
+        </form>
+      )}
 
       <div className="meal-list-heading">
         <h4>

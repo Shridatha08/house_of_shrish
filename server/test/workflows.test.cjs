@@ -446,6 +446,50 @@ test('subscription skip enforces ownership, cutoff, and duplicate protection', a
   assert.equal(app.state().subscriptions[0].skippedMeals.length, 1);
 });
 
+test('subscription skip range skips selected meals on scheduled dates and carries them forward', async () => {
+  const data = fixture();
+  data.subscriptions = [{
+    id: 'range', userId: 1, approved: true, itemName: 'Monthly (Lunch + Dinner)',
+    startDate: '2026-10-10', workingDaysRequired: 5
+  }];
+  const app = application(data);
+  const response = await app.request('post', '/api/subscriptions/:id/skip-range', {
+    fromDate: '2026-10-12',
+    toDate: '2026-10-13',
+    meals: ['lunch', 'dinner']
+  }, { id: 'range' });
+
+  assert.equal(response.code, 200);
+  assert.equal(app.state().subscriptions[0].skippedMeals.length, 4);
+  assert.deepEqual(
+    app.state().subscriptions[0].skippedMeals.map(({ date, meal }) => `${date}:${meal}`),
+    ['2026-10-12:lunch', '2026-10-12:dinner', '2026-10-13:lunch', '2026-10-13:dinner']
+  );
+  assert.equal(response.body.schedule.filter((entry) => entry.status === 'skipped').length, 4);
+  assert.equal(response.body.mealsBeyondDeadline, 0);
+});
+
+test('subscription skip range rejects invalid ranges and meals without partial changes', async () => {
+  const data = fixture();
+  data.subscriptions = [{
+    id: 'range', userId: 1, approved: true, itemName: 'Monthly (Lunch)',
+    startDate: '2026-10-10', workingDaysRequired: 5
+  }];
+  const app = application(data);
+
+  const invalidRange = await app.request('post', '/api/subscriptions/:id/skip-range', {
+    fromDate: '2026-10-13', toDate: '2026-10-12', meals: ['lunch']
+  }, { id: 'range' });
+  assert.equal(invalidRange.code, 400);
+
+  const invalidMeal = await app.request('post', '/api/subscriptions/:id/skip-range', {
+    fromDate: '2026-10-12', toDate: '2026-10-13', meals: ['dinner']
+  }, { id: 'range' });
+  assert.equal(invalidMeal.code, 400);
+  assert.equal(app.state().subscriptions[0].skippedMeals, undefined);
+  assert.equal(app.state().revision, 0);
+});
+
 test('Single Meal lunch/dinner cutoffs remain IST while monthly/ladoo can order after hours', async () => {
   const app = application();
   app.clock('2026-10-10T05:29:00Z');
