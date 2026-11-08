@@ -1148,6 +1148,12 @@ app.post('/api/auth/register', authRateLimit, async (req, res) => {
     passwordHash,
     createdAt: new Date().toISOString()
   };
+  // Proof of what the customer agreed to, as the DPDP Act requires. Older
+  // clients do not send it yet, so its absence is not an error.
+  const consentVersion = String((req.body || {}).consentVersion || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(consentVersion)) {
+    user.privacyConsent = { version: consentVersion, acceptedAt: user.createdAt };
+  }
   db.data.users.push(user);
   ensureReferralCode(db.data, user);
 
@@ -1287,6 +1293,8 @@ function purgeUserData(data, userId) {
   data.deviceTokens = (data.deviceTokens || []).filter((entry) => entry.userId !== userId);
   data.passwordResetRequests = (data.passwordResetRequests || []).filter((entry) => entry.userId !== userId);
   data.walletEntries = (data.walletEntries || []).filter((entry) => entry.userId !== userId);
+  // Feedback carries the customer's name and phone, so it goes with them.
+  data.feedback = (data.feedback || []).filter((entry) => entry.userId !== userId);
 }
 
 // DELETE /api/auth/me - customer-initiated account deletion, required by Play

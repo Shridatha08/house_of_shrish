@@ -1851,6 +1851,33 @@ button.subscription-calendar-day:disabled {
   font-size: 0.9rem;
 }
 
+.privacy-page dl {
+  margin: 0.5rem 0 0;
+}
+
+.privacy-page dt {
+  font-weight: 600;
+  margin-top: 0.75rem;
+}
+
+.privacy-page dd {
+  margin: 0.15rem 0 0;
+}
+
+.consent-check {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.consent-check input {
+  margin-top: 0.2rem;
+  width: auto;
+  flex: none;
+}
+
 .danger-zone {
   margin-top: 2rem;
   padding: 1.25rem;

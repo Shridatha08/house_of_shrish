@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { PRIVACY_VERSION } from './Privacy';
 import BackToMenu from '../components/BackToMenu';
 import { useAuth } from '../context/AuthContext';
 import { completePasswordReset, requestPasswordReset } from '../api';
@@ -28,6 +29,8 @@ export default function Login() {
   const [flatNumber, setFlatNumber] = useState('');
   const [pincode, setPincode] = useState('');
   const [referralCode, setReferralCode] = useState('');
+  // DPDP: an explicit, unticked-by-default agreement with the notice at hand.
+  const [consented, setConsented] = useState(false);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [forgotPassword, setForgotPassword] = useState(false);
@@ -48,7 +51,7 @@ export default function Login() {
     setSubmitting(true);
     try {
       if (mode === 'register') {
-        await register({ name, phone, password, address, flatNumber, pincode, referralCode: referralCode.trim().toUpperCase() || undefined });
+        await register({ name, phone, password, address, flatNumber, pincode, referralCode: referralCode.trim().toUpperCase() || undefined, consentVersion: PRIVACY_VERSION });
       } else {
         await login({ phone, password });
       }
@@ -237,6 +240,21 @@ export default function Login() {
             </label>
           )}
 
+          {mode === 'register' && (
+            <label className="consent-check">
+              <input
+                type="checkbox"
+                checked={consented}
+                onChange={(e) => setConsented(e.target.checked)}
+                required
+              />
+              <span>
+                I am 18 or older, and I agree to House of Shrish processing my details as described in the{' '}
+                <Link to="/privacy" target="_blank">privacy notice</Link>.
+              </span>
+            </label>
+          )}
+
           {error && <p className="status-text error">{error}</p>}
           {notice && <p className="status-text">{notice}</p>}
 
@@ -246,7 +264,7 @@ export default function Login() {
             </button>
           )}
 
-          <button className="btn-primary" type="submit" disabled={submitting}>
+          <button className="btn-primary" type="submit" disabled={submitting || (mode === 'register' && !consented)}>
             {submitting ? 'Please wait…' : mode === 'register' ? 'Create account' : 'Log In'}
           </button>
         </form>

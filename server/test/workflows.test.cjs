@@ -407,6 +407,29 @@ test('account deletion clears personal data but keeps orders on the books', asyn
   assert.equal((await app.request('get', '/api/auth/me')).code, 401);
 });
 
+test('account deletion also erases the customer\'s feedback', async () => {
+  const app = application();
+  assert.equal((await app.request('post', '/api/feedback', { type: 'praise', message: 'Lovely dal today' })).code, 201);
+  assert.equal(app.state().feedback.length, 1);
+
+  assert.equal((await app.request('delete', '/api/auth/me')).code, 204);
+  assert.equal(app.state().feedback.length, 0);
+});
+
+test('registration records which privacy notice was agreed to', async () => {
+  const app = application();
+  const consented = await app.request('post', '/api/auth/register', { ...customer, phone: '9111111111', password: 'password1', consentVersion: '2026-11-08' });
+  assert.equal(consented.code, 201);
+  const user = app.state().users.find((entry) => entry.phone === '9111111111');
+  assert.deepEqual(user.privacyConsent, { version: '2026-11-08', acceptedAt: user.createdAt });
+  assert.equal(consented.body.user.privacyConsent, undefined, 'not echoed to the client');
+
+  // Clients released before the consent step still register.
+  const older = await app.request('post', '/api/auth/register', { ...customer, phone: '9222222222', password: 'password1' });
+  assert.equal(older.code, 201);
+  assert.equal(app.state().users.find((entry) => entry.phone === '9222222222').privacyConsent, undefined);
+});
+
 test('an order in progress blocks account deletion', async () => {
   const app = application();
   const created = await purchase(app);
