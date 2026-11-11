@@ -3,8 +3,8 @@ import { Link } from 'react-router-dom';
 // Kept in step with the app's lib/features/legal/privacy_screen.dart. Bump
 // PRIVACY_VERSION with every change: registration records which version each
 // customer agreed to.
-export const PRIVACY_VERSION = '2026-11-08';
-const UPDATED = '8 November 2026';
+export const PRIVACY_VERSION = '2026-11-11';
+const UPDATED = '11 November 2026';
 const PHONE = '+91 91803 81854';
 const EMAIL = 'houseofshrish@gmail.com';
 
@@ -16,9 +16,9 @@ export default function Privacy() {
 
       <p>
         House of Shrish runs a vegetarian meal delivery service in Bengaluru through this
-        website and our Android app. This notice explains what personal data we collect,
-        why, who we share it with, how long we keep it, and how you can exercise your rights
-        under the Digital Personal Data Protection Act, 2023 (DPDP Act).
+        website and our Android and iPhone apps. This notice explains what personal data we
+        collect, why, who we share it with, how long we keep it, and how you can exercise your
+        rights under the Digital Personal Data Protection Act, 2023 (DPDP Act).
       </p>
 
       <h2>Who we are</h2>
@@ -103,13 +103,15 @@ export default function Privacy() {
         <li>
           <strong>Service providers</strong> process data for us under our instructions:
           Render (hosts our servers), Vercel (hosts this website), MongoDB (stores our
-          database), Google Firebase (delivers notifications) and YouPI (our online UPI
-          payment gateway, which receives your name, phone number and the order amount).
+          database), Google Firebase (delivers notifications, through Apple's push
+          notification service on iPhones) and YouPI (our online UPI payment gateway, which
+          receives your name, phone number and the order amount).
         </li>
         <li>
           <strong>Maps and address lookup.</strong> OpenStreetMap supplies the map and, when
           you pin your address, receives those coordinates to look up the street name. Your
-          phone's own location service (Google on most Android phones) may also be used.
+          phone's own location service (Google on most Android phones, Apple on iPhones) may
+          also be used.
         </li>
         <li>
           <strong>Payments.</strong> UPI payments are settled by your own UPI app and bank.
