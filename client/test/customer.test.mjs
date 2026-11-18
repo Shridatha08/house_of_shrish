@@ -8,7 +8,7 @@ import { deadlineMessage, deadlineRisk, daysUntilDeadline, etaText, RISK } from 
 import { statusOf, skipAvailability, scheduleByDate, upcomingTotals, planSummary, formatMealDate, withinDays } from '../src/schedule.js';
 import { feedbackError, thanksFor } from '../src/feedback.js';
 import { formatCountdown, isPaymentUrgent, orderStatusText, paymentWindowClosed, timeLeftToPay, PAYMENT_WINDOW_MS } from '../src/paymentWindow.js';
-import { dryFruitsLadooDeliveryCharge } from '../src/delivery.js';
+import { dryFruitsLadooDeliveryCharge, ladooDeliveryNote } from '../src/delivery.js';
 import { isMealPackage, isMonday, isMonthlyPlan, isSkippable, isWeeklyPlan, istToday, nextMonday, planName, subscriptionPlan } from '../src/mealPlans.js';
 
 const subWith = (overrides = {}) => ({
@@ -322,6 +322,26 @@ test('only dry fruits ladoo orders beyond the radius get the delivery charge', (
   assert.equal(dryFruitsLadooDeliveryCharge(ladoo, farAway, config), 99);
   assert.equal(dryFruitsLadooDeliveryCharge(ladoo, null, config), 0);
   assert.equal(dryFruitsLadooDeliveryCharge([{ name: 'Other Sweet' }], farAway, config), 0);
+});
+
+test('ladoo delivery is free up to 5 km, then ₹49 up to 10 km, then ₹99', () => {
+  const config = {
+    kitchenLat: 12.9744129,
+    kitchenLng: 77.6743533,
+    ladooDeliveryTiers: [
+      { upToKm: 5, charge: 0 },
+      { upToKm: 10, charge: 49 },
+      { upToKm: null, charge: 99 }
+    ]
+  };
+  const ladoo = [{ name: 'Dry Fruits Ladoo' }];
+  assert.equal(dryFruitsLadooDeliveryCharge(ladoo, { lat: 13.0177, lng: 77.6743 }, config), 0);  // ~4.8 km
+  assert.equal(dryFruitsLadooDeliveryCharge(ladoo, { lat: 12.9716, lng: 77.5946 }, config), 49); // ~8.6 km
+  assert.equal(dryFruitsLadooDeliveryCharge(ladoo, { lat: 13.0844, lng: 77.6743 }, config), 99); // ~12 km
+  assert.equal(
+    ladooDeliveryNote(config),
+    'Dry Fruits Ladoo delivery: free up to 5 km, ₹49 up to 10 km, ₹99 beyond.'
+  );
 });
 
 test('rupee amounts show paise only when there are any', () => {

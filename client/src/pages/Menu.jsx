@@ -327,9 +327,6 @@ export default function Menu() {
       <footer className="site-footer">
         <div className="delivery-info">
           <p className="delivery-info-title">✦ Free Door Delivery ✦</p>
-          <p className="delivery-info-note">
-            [Applicable to Malleshpalya and Kaggadasapura, else delivery charges applicable]
-          </p>
         </div>
 
         <p className="eco-text">

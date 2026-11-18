@@ -35,7 +35,18 @@ const YOUPI_ORDER_PREFIX = 'HOS-';
 const KITCHEN_LAT = Number(process.env.KITCHEN_LAT ?? 12.9744129);
 const KITCHEN_LNG = Number(process.env.KITCHEN_LNG ?? 77.6743533);
 const DELIVERY_RADIUS_KM = Number(process.env.DELIVERY_RADIUS_KM ?? 4);
-const LADOO_DELIVERY_CHARGE = 99;
+// Ladoos reach beyond the meal radius. Distance from the kitchen picks the
+// charge: free up to 5 km, then ₹49 up to 10 km, then ₹99. Meals deliver free.
+const LADOO_DELIVERY_TIERS = [
+  { upToKm: 5, charge: 0 },
+  { upToKm: 10, charge: 49 },
+  { upToKm: null, charge: 99 }
+];
+const LADOO_DELIVERY_CHARGE = LADOO_DELIVERY_TIERS.at(-1).charge;
+
+function ladooDeliveryCharge(distanceKm) {
+  return LADOO_DELIVERY_TIERS.find((tier) => tier.upToKm === null || distanceKm <= tier.upToKm).charge;
+}
 const OUT_OF_RANGE_MESSAGE = 'Sorry Unavailable in your area. We are working to deliver soon!';
 const ADMIN_KEY = process.env.ADMIN_KEY;
 if (!ADMIN_KEY) throw new Error('ADMIN_KEY environment variable is required.');
@@ -1775,7 +1786,9 @@ app.get('/api/store-config', async (req, res) => {
     kitchenLat: KITCHEN_LAT,
     kitchenLng: KITCHEN_LNG,
     deliveryRadiusKm: DELIVERY_RADIUS_KM,
+    // Older apps price the ladoo preview with this single charge.
     ladooDeliveryCharge: LADOO_DELIVERY_CHARGE,
+    ladooDeliveryTiers: LADOO_DELIVERY_TIERS,
     singleMealClosedToday: !isWorkingDay(todayISTStr(), subscriptionHolidays(db.data)),
     onlinePayment: onlinePaymentActive(settings),
     upiId: settings.upiId
@@ -2581,7 +2594,7 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
   // applicable delivery charge. Other sweets can still be ordered without one.
   const needsLocalDelivery = items.some((line) => requiresLocalDelivery(menuById.get(Number(line.id))));
   const hasDryFruitsLadoo = items.some((line) => isDryFruitsLadoo(menuById.get(Number(line.id))));
-  let outsideDeliveryRadius = false;
+  let distanceKm = 0;
   if (needsLocalDelivery || hasDryFruitsLadoo) {
     if (customer.lat == null || customer.lng == null) {
       return res.status(400).json({
@@ -2590,12 +2603,12 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
           : 'Pin your delivery location on the map to calculate the Dry Fruits Ladoo delivery charge.'
       });
     }
-    outsideDeliveryRadius = distanceFromKitchenKm(customer.lat, customer.lng) > DELIVERY_RADIUS_KM;
-    if (needsLocalDelivery && outsideDeliveryRadius) {
+    distanceKm = distanceFromKitchenKm(customer.lat, customer.lng);
+    if (needsLocalDelivery && distanceKm > DELIVERY_RADIUS_KM) {
       return res.status(409).json({ error: OUT_OF_RANGE_MESSAGE });
     }
   }
-  const deliveryCharge = hasDryFruitsLadoo && outsideDeliveryRadius ? LADOO_DELIVERY_CHARGE : 0;
+  const deliveryCharge = hasDryFruitsLadoo ? ladooDeliveryCharge(distanceKm) : 0;
   const cutoffExempt = items.every((line) => {
     const menuItem = menuById.get(Number(line.id));
     return menuItem && (isMealPlan(menuItem.name) || menuItem.id === 6);

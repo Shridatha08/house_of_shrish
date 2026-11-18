@@ -7,14 +7,19 @@ import { placeOrder, getWallet, getStoreConfig } from '../api';
 import { walletSplit } from '../wallet';
 import { CGST_RATE, SGST_RATE, formatRupees, gstBreakdown } from '../gst';
 import LocationPicker from '../components/LocationPicker';
-import { dryFruitsLadooDeliveryCharge } from '../delivery';
+import { dryFruitsLadooDeliveryCharge, ladooDeliveryNote } from '../delivery';
 import { WEEKLY_START_MESSAGE, isMealPackage, isMonday, isWeeklyPlan, nextMonday } from '../mealPlans';
 
 const DEFAULT_DELIVERY_CONFIG = {
   kitchenLat: 12.9744129,
   kitchenLng: 77.6743533,
   deliveryRadiusKm: 4,
-  ladooDeliveryCharge: 99
+  ladooDeliveryCharge: 99,
+  ladooDeliveryTiers: [
+    { upToKm: 5, charge: 0 },
+    { upToKm: 10, charge: 49 },
+    { upToKm: null, charge: 99 }
+  ]
 };
 
 function todayIST() {
@@ -321,7 +326,7 @@ export default function Checkout() {
           <span className="location-header">Pin your location</span>
           {hasDryFruitsLadoo && (
             <p className="status-text">
-              Dry Fruits Ladoo orders beyond {storeConfig.deliveryRadiusKm} km incur a {formatRupees(storeConfig.ladooDeliveryCharge)} delivery charge.
+              {ladooDeliveryNote(storeConfig)}
             </p>
           )}
           {hasDryFruitsLadoo && storeConfigError && (
