@@ -28,7 +28,7 @@ export function ladooTiers(config = {}) {
     return config.ladooDeliveryTiers;
   }
   return [
-    { upToKm: Number(config.deliveryRadiusKm ?? 4), charge: 0 },
+    { upToKm: Number(config.deliveryRadiusKm ?? 5), charge: 0 },
     { upToKm: null, charge: Number(config.ladooDeliveryCharge ?? 99) }
   ];
 }

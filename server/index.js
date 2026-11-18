@@ -34,7 +34,7 @@ const YOUPI_ORDER_PREFIX = 'HOS-';
 // Malleshpalya kitchen. Override with env vars to set an exact rooftop pin.
 const KITCHEN_LAT = Number(process.env.KITCHEN_LAT ?? 12.9744129);
 const KITCHEN_LNG = Number(process.env.KITCHEN_LNG ?? 77.6743533);
-const DELIVERY_RADIUS_KM = Number(process.env.DELIVERY_RADIUS_KM ?? 4);
+const DELIVERY_RADIUS_KM = Number(process.env.DELIVERY_RADIUS_KM ?? 5);
 // Ladoos reach beyond the meal radius. Distance from the kitchen picks the
 // charge: free up to 5 km, then ₹49 up to 10 km, then ₹99. Meals deliver free.
 const LADOO_DELIVERY_TIERS = [

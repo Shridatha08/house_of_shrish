@@ -13,7 +13,7 @@ import { WEEKLY_START_MESSAGE, isMealPackage, isMonday, isWeeklyPlan, nextMonday
 const DEFAULT_DELIVERY_CONFIG = {
   kitchenLat: 12.9744129,
   kitchenLng: 77.6743533,
-  deliveryRadiusKm: 4,
+  deliveryRadiusKm: 5,
   ladooDeliveryCharge: 99,
   ladooDeliveryTiers: [
     { upToKm: 5, charge: 0 },

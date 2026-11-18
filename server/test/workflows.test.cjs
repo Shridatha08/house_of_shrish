@@ -927,6 +927,9 @@ test('meals are range-limited and ladoo delivery is charged by distance', async 
   assert.equal(nearbyLadoo.body.order.deliveryCharge, 0);
   assert.equal(nearbyLadoo.body.order.total, 136);
 
+  const edgeMeal = await app.request('post', '/api/orders', { items: meal, customer: justInside }, {}, {});
+  assert.equal(edgeMeal.code, 201, 'meals deliver up to 5 km');
+
   const freeLadoo = await app.request('post', '/api/orders', { items: ladoo, customer: justInside }, {}, {});
   assert.equal(freeLadoo.body.order.deliveryCharge, 0, 'free up to 5 km, beyond the meal radius');
 
