@@ -150,7 +150,6 @@ export default function Menu() {
                   onClick={() => onSelectPlan(plan.id)}
                 >
                   <span className="customisation-pill-title">{planLabel(plan.name)}</span>
-                  <span className="customisation-pill-desc">₹{priceOf(plan, customisationFor(selectedPlan))} / {unit}</span>
                 </button>
               ))}
             </div>
