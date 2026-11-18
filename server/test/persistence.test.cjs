@@ -333,20 +333,44 @@ test('menu items are reconciled back to the shipped definitions', async () => {
   const adapter = await migrated();
   const first = await adapter.getDb();
 
-  // The legacy fixture carries a stale customisation list.
-  assert.ok(first.data.menu.find((item) => item.id === 1).customisations.length > 1);
+  // The legacy fixture sells meals with unpriced customisations.
+  const single = first.data.menu.find((item) => item.id === 1);
+  assert.equal(single.customisations, undefined);
+  assert.deepEqual(
+    single.variants.map((variant) => `${variant.label}:${variant.price}`),
+    ['Royal Nourish Box:199', 'Chapati Nourish Box:139', 'Rice Nourish Box:139']
+  );
+  assert.equal(single.price, 199);
   assert.ok(first.data.menu.some((item) => item.id === 6), 'missing items are restored');
   assert.deepEqual(
     first.data.menu.filter((item) => [7, 8, 9].includes(item.id)).map((item) => [item.name, item.price]),
-    [['Weekly (Lunch)', 749], ['Weekly (Dinner)', 749], ['Weekly (Lunch + Dinner)', 1499]],
+    [['Weekly (Lunch)', 975], ['Weekly (Dinner)', 975], ['Weekly (Lunch + Dinner)', 1949]],
     'weekly packages are added to an existing menu'
   );
 
   const second = await adapter.getDb();
   assert.deepEqual(
-    second.data.menu.find((item) => item.id === 1).customisations,
-    first.data.menu.find((item) => item.id === 1).customisations
+    second.data.menu.find((item) => item.id === 1).variants,
+    single.variants
   );
+});
+
+test('meal boxes keep admin prices but always ship their contents', async () => {
+  const adapter = loadAdapter();
+  const first = await adapter.getDb();
+  const monthly = first.data.menu.find((item) => item.id === 4);
+  assert.deepEqual(monthly.variants.map((variant) => variant.price), [9899, 7099, 7099]);
+
+  // An admin repricing, and contents edited outside the shipped definition.
+  const stored = adapter.raw('menu').get(4);
+  stored.variants[1].price = 6999;
+  stored.variants[2].description = 'Something else';
+  adapter.raw('menu').set(4, stored);
+
+  const second = await adapter.getDb();
+  const boxes = second.data.menu.find((item) => item.id === 4).variants;
+  assert.deepEqual(boxes.map((variant) => variant.price), [9899, 6999, 7099]);
+  assert.equal(boxes[2].description, 'Flavourful rice, Vegetable curry, Vegetable/Fruit Salad');
 });
 
 test('the legacy ladoo size and price migrate to the new 100g option', async () => {

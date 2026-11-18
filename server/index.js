@@ -2105,7 +2105,7 @@ app.post('/api/admin/subscriptions', async (req, res) => {
     userId: user.id,
     orderId: null,
     itemName: menuItem.name,
-    customisation: menuItem.customisations?.[0] || '',
+    customisation: menuItem.variants?.[0]?.label || menuItem.customisations?.[0] || '',
     mealSlots: getSubscriptionMealSlots(menuItem.name),
     startDate,
     workingDaysRequired: planWorkingDays(menuItem.name, getSettings(db.data)),
@@ -2676,7 +2676,10 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
     let unitPrice = menuItem.price;
     if (Array.isArray(menuItem.variants) && menuItem.variants.length > 0) {
       const variant = menuItem.variants.find((option) => option.label === line.customisation);
-      if (!variant) return res.status(400).json({ error: `Choose a valid size for ${menuItem.name}.` });
+      if (!variant) {
+        const what = menuItem.category === 'Pure Veg Meals' ? 'meal box' : 'size';
+        return res.status(400).json({ error: `That ${what} for ${menuItem.name} has changed. Remove it from your cart and add it again.` });
+      }
       customisation = variant.label;
       unitPrice = variant.price;
     } else if (Array.isArray(menuItem.customisations) && menuItem.customisations.length > 0) {

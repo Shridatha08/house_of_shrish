@@ -1,20 +1,37 @@
 import crypto from 'crypto';
 import { MongoClient } from 'mongodb';
 
-const MEAL_CUSTOMISATIONS = [
-  '3 Roti, Vegetable curry, Flavourful rice, Curd, Vegetable/Fruit Salad',
-  '4 Roti, Vegetable curry, Curd, Vegetable/Fruit Salad'
+// The meal boxes every meal item is sold in. Prices are before GST, in the
+// order [Royal, Chapati, Rice] for each menu item id.
+const MEAL_BOXES = [
+  { label: 'Royal Nourish Box', description: '3 Roti, Vegetable curry, Flavourful rice, Curd, Vegetable/Fruit Salad' },
+  { label: 'Chapati Nourish Box', description: '3 Roti, Vegetable curry, Vegetable/Fruit Salad' },
+  { label: 'Rice Nourish Box', description: 'Flavourful rice, Vegetable curry, Vegetable/Fruit Salad' }
 ];
+const MEAL_BOX_PRICES = {
+  1: [199, 139, 139],
+  2: [4999, 3599, 3599],
+  3: [4999, 3599, 3599],
+  4: [9899, 7099, 7099],
+  7: [975, 689, 689],
+  8: [975, 689, 689],
+  9: [1949, 1369, 1369]
+};
+
+function mealItem(id, name) {
+  const variants = MEAL_BOXES.map((box, index) => ({ ...box, price: MEAL_BOX_PRICES[id][index] }));
+  return { id, name, description: 'Pure Veg Meals', price: variants[0].price, category: 'Pure Veg Meals', image: '', variants };
+}
 
 const defaultData = {
   menu: [
-    { id: 1, name: 'Single Meal', description: 'Pure Veg Meals', price: 129, category: 'Pure Veg Meals', image: '', customisations: MEAL_CUSTOMISATIONS },
-    { id: 2, name: 'Monthly (Lunch)', description: 'Pure Veg Meals', price: 3299, category: 'Pure Veg Meals', image: '', customisations: MEAL_CUSTOMISATIONS },
-    { id: 3, name: 'Monthly (Dinner)', description: 'Pure Veg Meals', price: 3299, category: 'Pure Veg Meals', image: '', customisations: MEAL_CUSTOMISATIONS },
-    { id: 4, name: 'Monthly (Lunch + Dinner)', description: 'Pure Veg Meals', price: 5499, category: 'Pure Veg Meals', image: '', customisations: MEAL_CUSTOMISATIONS },
-    { id: 7, name: 'Weekly (Lunch)', description: 'Pure Veg Meals', price: 749, category: 'Pure Veg Meals', image: '', customisations: MEAL_CUSTOMISATIONS },
-    { id: 8, name: 'Weekly (Dinner)', description: 'Pure Veg Meals', price: 749, category: 'Pure Veg Meals', image: '', customisations: MEAL_CUSTOMISATIONS },
-    { id: 9, name: 'Weekly (Lunch + Dinner)', description: 'Pure Veg Meals', price: 1499, category: 'Pure Veg Meals', image: '', customisations: MEAL_CUSTOMISATIONS },
+    mealItem(1, 'Single Meal'),
+    mealItem(2, 'Monthly (Lunch)'),
+    mealItem(3, 'Monthly (Dinner)'),
+    mealItem(4, 'Monthly (Lunch + Dinner)'),
+    mealItem(7, 'Weekly (Lunch)'),
+    mealItem(8, 'Weekly (Dinner)'),
+    mealItem(9, 'Weekly (Lunch + Dinner)'),
     {
       id: 6,
       name: 'Dry Fruits Ladoo',
@@ -192,6 +209,31 @@ function reconcileMenu(menu) {
     if (Array.isArray(menuItem.customisations) && JSON.stringify(existingItem.customisations) !== JSON.stringify(menuItem.customisations)) {
       existingItem.customisations = structuredClone(menuItem.customisations);
       changed = true;
+    }
+  }
+
+  // Meals moved from unpriced options to priced boxes. The switch happens
+  // once, when an item's box names don't match; prices the admin sets later
+  // are kept, while what goes in each box always follows this file.
+  const boxLabels = JSON.stringify(MEAL_BOXES.map((box) => box.label));
+  for (const id of Object.keys(MEAL_BOX_PRICES).map(Number)) {
+    const existingItem = menu.find((item) => item.id === id);
+    if (!existingItem) continue;
+    const shipped = defaultData.menu.find((item) => item.id === id);
+    const labels = JSON.stringify((existingItem.variants || []).map((variant) => variant.label));
+    if (labels !== boxLabels) {
+      existingItem.variants = structuredClone(shipped.variants);
+      existingItem.price = shipped.price;
+      delete existingItem.customisations;
+      changed = true;
+      continue;
+    }
+    for (const variant of existingItem.variants) {
+      const { description } = MEAL_BOXES.find((box) => box.label === variant.label);
+      if (variant.description !== description) {
+        variant.description = description;
+        changed = true;
+      }
     }
   }
 

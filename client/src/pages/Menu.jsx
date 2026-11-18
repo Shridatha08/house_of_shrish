@@ -23,6 +23,12 @@ function planLabel(name) {
   return match ? match[1] : name;
 }
 
+// What a menu item costs with the chosen option; priced options override the item price.
+function priceOf(item, option) {
+  const variant = item.variants?.find((entry) => entry.label === option) || item.variants?.[0];
+  return variant?.price ?? item.price;
+}
+
 function CustomisationPicker({ item, selected, onSelect, hideLabel }) {
   const options = item.variants || item.customisations.map((label) => ({ label }));
   return (
@@ -36,8 +42,17 @@ function CustomisationPicker({ item, selected, onSelect, hideLabel }) {
             className={selected === option.label ? 'customisation-pill active' : 'customisation-pill'}
             onClick={() => onSelect(option.label)}
           >
-            <span className="customisation-pill-title">Option {idx + 1}</span>
-            <span className="customisation-pill-desc">{option.label}{option.price ? ` · ₹${option.price}` : ''}</span>
+            {option.description ? (
+              <>
+                <span className="customisation-pill-title">{option.label} · ₹{option.price}</span>
+                <span className="customisation-pill-desc">{option.description}</span>
+              </>
+            ) : (
+              <>
+                <span className="customisation-pill-title">Option {idx + 1}</span>
+                <span className="customisation-pill-desc">{option.label}{option.price ? ` · ₹${option.price}` : ''}</span>
+              </>
+            )}
           </button>
         ))}
       </div>
@@ -135,27 +150,31 @@ export default function Menu() {
                   onClick={() => onSelectPlan(plan.id)}
                 >
                   <span className="customisation-pill-title">{planLabel(plan.name)}</span>
-                  <span className="customisation-pill-desc">₹{plan.price} / {unit}</span>
+                  <span className="customisation-pill-desc">₹{priceOf(plan, customisationFor(selectedPlan))} / {unit}</span>
                 </button>
               ))}
             </div>
           </div>
 
-          {selectedPlan.customisations?.length > 0 && (
+          {(selectedPlan.customisations?.length > 0 || selectedPlan.variants?.length > 0) && (
             <div className="step-2">
-              <span className="customisation-label">Step 2 · Choose your meal</span>
+              <span className="customisation-label">Step 2 · Choose your meal box</span>
               <CustomisationPicker
                 item={selectedPlan}
                 selected={customisationFor(selectedPlan)}
                 hideLabel
+                // The box is chosen once for the card, whichever plan is picked.
                 onSelect={(option) =>
-                  setSelectedCustomisation((prev) => ({ ...prev, [selectedPlan.id]: option }))
+                  setSelectedCustomisation((prev) => ({
+                    ...prev,
+                    ...Object.fromEntries(plans.map((plan) => [plan.id, option]))
+                  }))
                 }
               />
             </div>
           )}
 
-          <p className="menu-price">₹{selectedPlan.price}{unit === 'week' ? ' / week' : ''}</p>
+          <p className="menu-price">₹{priceOf(selectedPlan, customisationFor(selectedPlan))} / {unit}</p>
         </div>
         <div className="menu-card-actions">
           {selectedPlan.available === false ? <span className="status-text">Unavailable</span> : quantityOf(selectedPlan) === 0 ? (
@@ -227,7 +246,7 @@ export default function Menu() {
                                 const cutoff = service === 'lunch'
                                   ? storeConfig.lunchCutoffTime || '11:00'
                                   : storeConfig.dinnerCutoffTime || '18:00';
-                                const price = item.price * (service === 'both' ? 2 : 1);
+                                const price = priceOf(item, customisationFor(item)) * (service === 'both' ? 2 : 1);
                                 const subtitle = service === 'both'
                                   ? `₹${price} · two portions, before both cutoffs`
                                   : `₹${price} · ${cutoff} IST cutoff`;
@@ -249,7 +268,9 @@ export default function Menu() {
                           </div>
                         )
                     )}
-                    {item.variants?.length > 0 ? (
+                    {item.variants?.some((variant) => variant.description) ? (
+                      <p className="menu-price">₹{priceOf(item, customisationFor(item))}</p>
+                    ) : item.variants?.length > 0 ? (
                       <p className="menu-price">₹{Math.min(...item.variants.map((variant) => variant.price))} - ₹{Math.max(...item.variants.map((variant) => variant.price))}</p>
                     ) : <p className="menu-price">₹{item.price}</p>}
                     {(item.customisations?.length > 0 || item.variants?.length > 0) && (
