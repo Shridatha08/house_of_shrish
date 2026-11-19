@@ -549,11 +549,11 @@ test('Single Meal is unavailable on Sundays and holidays but orderable on other 
   assert.match(holidayOrder.body.error, /Sundays and kitchen holidays/);
 });
 
-test('a combined Single Meal is charged and counted as two portions', async () => {
+test('Single Meal cannot be ordered for lunch and dinner together', async () => {
   const app = application();
   app.clock('2026-10-10T04:00:00Z');
 
-  const created = await app.request('post', '/api/orders', {
+  const rejected = await app.request('post', '/api/orders', {
     items: [{
       id: 1,
       quantity: 1,
@@ -563,27 +563,8 @@ test('a combined Single Meal is charged and counted as two portions', async () =
     customer
   });
 
-  assert.equal(created.code, 201);
-  assert.equal(created.body.order.taxableValue, 258);
-  assert.equal(created.body.order.items[0].price, 258);
-  assert.equal(created.body.order.items[0].mealService, 'both');
-  assert.equal(created.body.order.mealService, 'both');
-  assert.deepEqual(Array.from(created.body.order.mealServices), ['lunch', 'dinner']);
-  assert.equal(created.body.order.timeSlot, 'both');
-
-  const capacityLimited = application();
-  capacityLimited.state().settings.dailyOrderCapacity = 1;
-  capacityLimited.clock('2026-10-10T04:00:00Z');
-  const rejected = await capacityLimited.request('post', '/api/orders', {
-    items: [{
-      id: 1,
-      quantity: 1,
-      customisation: 'Meal A',
-      mealService: 'both'
-    }],
-    customer
-  });
-  assert.equal(rejected.code, 409);
+  assert.equal(rejected.code, 400);
+  assert.match(rejected.body.error, /lunch or dinner only/);
 });
 
 test('explicit Single Meal service must still be before its cutoff', async () => {
@@ -596,7 +577,6 @@ test('explicit Single Meal service must still be before its cutoff', async () =>
   });
 
   assert.equal((await request('lunch')).code, 409);
-  assert.equal((await request('both')).code, 409);
   assert.equal((await request('dinner')).code, 201);
 });
 

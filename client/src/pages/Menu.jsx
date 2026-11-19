@@ -92,7 +92,7 @@ export default function Menu() {
     const current = `${parts.find((part) => part.type === 'hour').value}:${parts.find((part) => part.type === 'minute').value}`;
     const lunchOpen = current < (storeConfig.lunchCutoffTime || '11:00');
     const dinnerOpen = current < (storeConfig.dinnerCutoffTime || '18:00');
-    if (lunchOpen && dinnerOpen) return ['lunch', 'dinner', 'both'];
+    if (lunchOpen && dinnerOpen) return ['lunch', 'dinner'];
     if (lunchOpen) return ['lunch'];
     if (dinnerOpen) return ['dinner'];
     return [];
@@ -245,10 +245,7 @@ export default function Menu() {
                                 const cutoff = service === 'lunch'
                                   ? storeConfig.lunchCutoffTime || '11:00'
                                   : storeConfig.dinnerCutoffTime || '18:00';
-                                const price = priceOf(item, customisationFor(item)) * (service === 'both' ? 2 : 1);
-                                const subtitle = service === 'both'
-                                  ? `₹${price} · two portions, before both cutoffs`
-                                  : `₹${price} · ${cutoff} IST cutoff`;
+                                const subtitle = `₹${priceOf(item, customisationFor(item))} · ${cutoff} IST cutoff`;
                                 return (
                                   <button
                                     key={service}
@@ -257,7 +254,7 @@ export default function Menu() {
                                     onClick={() => setSelectedMealService((prev) => ({ ...prev, [item.id]: service }))}
                                   >
                                     <span className="customisation-pill-title">
-                                      {service === 'both' ? 'Lunch + Dinner' : service[0].toUpperCase() + service.slice(1)}
+                                      {service[0].toUpperCase() + service.slice(1)}
                                     </span>
                                     <span className="customisation-pill-desc">{subtitle}</span>
                                   </button>

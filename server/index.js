@@ -2621,8 +2621,8 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
     const menuItem = menuById.get(Number(line.id));
     if (line.mealService !== undefined) {
       if (menuItem?.name.toLowerCase() !== 'single meal' ||
-          !['lunch', 'dinner', 'both'].includes(line.mealService)) {
-        return res.status(400).json({ error: 'Invalid meal service for Single Meal.' });
+          !['lunch', 'dinner'].includes(line.mealService)) {
+        return res.status(400).json({ error: 'Single Meal is for lunch or dinner only. Remove it from your cart and add it again.' });
       }
       if (!mealServiceIsOpen(line.mealService, settings)) {
         return res.status(409).json({ error: 'That meal service has passed its cutoff.' });
