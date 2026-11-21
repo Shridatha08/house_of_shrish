@@ -3077,3 +3077,46 @@ test('the admin sets a repeating weekly menu that customers see and settings sav
   assert.equal(config.weeklyMenu.tue.lunch.rice, 'Jeera Rice');
   assert.equal(config.weeklyMenu.tue.dinner.curry, 'Palak Paneer');
 });
+
+test('purging test data keeps only the chosen customers and their orders', async () => {
+  const data = populated();
+  data.users.push({ id: 2, name: 'Tester', phone: '9000000002', referralCode: 'TEST2' });
+  data.users[0].referredBy = 2;
+  data.sessions.push({ token: 'tester-token', userId: 2 });
+  data.orders.push(
+    { id: 901, orderNumber: '901', userId: 2, status: 'delivered', createdAt: now, items: [], customer: { ...customer, phone: '9000000002' } },
+    { id: 902, orderNumber: '902', userId: null, status: 'delivered', createdAt: now, items: [], customer: { ...customer, phone: '9000000003' } },
+    { id: 903, orderNumber: '903', userId: null, status: 'delivered', createdAt: now, items: [], customer: { ...customer } }
+  );
+  data.subscriptions.push({ id: 'sub-2', userId: 2, approved: true, itemName: 'Monthly (Lunch)', startDate: '2026-10-10', workingDaysRequired: 5, skippedMeals: [] });
+  data.walletEntries = [{ id: 'w1', userId: 1, amount: 50 }, { id: 'w2', userId: 2, amount: 50 }];
+  data.feedback = [{ id: 'f1', userId: 2, message: 'test' }];
+  data.deviceTokens.push({ token: 'e'.repeat(32), userId: null, orderId: 902, isAdmin: false });
+  const app = application(data);
+  const keeper = app.state().users[0];
+
+  const purge = (body, headers = adminHeaders) => app.request('post', '/api/admin/purge-test-data', body, {}, headers);
+  assert.equal((await purge({ keepPhones: [keeper.phone], confirm: 'DELETE' }, {})).code, 403);
+  assert.equal((await purge({ keepPhones: [keeper.phone] })).code, 400);
+  assert.equal((await purge({ keepPhones: ['9999999999'], confirm: 'DELETE' })).code, 400);
+  assert.equal((await purge({ keepPhones: [], confirm: 'DELETE' })).code, 400);
+  assert.equal(app.state().orders.length, 4, 'rejected attempts change nothing');
+
+  const result = await purge({ keepPhones: [keeper.phone], confirm: 'DELETE' });
+  assert.equal(result.code, 200);
+  assert.deepEqual({ orders: result.body.orders, users: result.body.users, subscriptions: result.body.subscriptions }, { orders: 2, users: 1, subscriptions: 1 });
+  assert.match(result.body.snapshotId, /^reset-/);
+  assert.equal(app.snapshots[0].orders.length, 4);
+
+  const after = app.state();
+  assert.deepEqual(after.orders.map((order) => order.id).sort(), [900, 903]);
+  assert.deepEqual(after.users.map((user) => user.id), [1]);
+  assert.equal(after.users[0].referredBy, undefined);
+  assert.deepEqual(after.subscriptions.map((entry) => entry.id), ['sub-1']);
+  assert.deepEqual(after.walletEntries.map((entry) => entry.id), ['w1']);
+  assert.equal(after.feedback.length, 0);
+  assert.equal(after.sessions.some((session) => session.userId === 2), false);
+  assert.equal(after.deviceTokens.some((entry) => entry.orderId === 902), false);
+  assert.equal(after.deviceTokens.some((entry) => entry.isAdmin), true);
+  assert.equal(after.drivers.length, 1, 'drivers are not customer data');
+});

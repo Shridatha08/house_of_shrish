@@ -2480,6 +2480,63 @@ app.post('/api/admin/reset', async (req, res) => {
   res.json({ ...counts, snapshotId });
 });
 
+// POST /api/admin/purge-test-data - remove every customer except the phones kept, with their orders
+app.post('/api/admin/purge-test-data', async (req, res) => {
+  if (req.headers['x-admin-key'] !== ADMIN_KEY) return res.status(403).json({ error: 'Invalid admin key.' });
+  const { keepPhones, confirm } = req.body || {};
+  if (confirm !== 'DELETE') return res.status(400).json({ error: 'Type DELETE to confirm this cannot be undone.' });
+  const phones = Array.isArray(keepPhones) ? [...new Set(keepPhones.map((phone) => String(phone).trim()))] : [];
+  if (phones.length === 0 || phones.some((phone) => !/^\d{10}$/.test(phone))) {
+    return res.status(400).json({ error: 'Enter the 10-digit phone number of every customer to keep.' });
+  }
+
+  const db = await getDb();
+  const kept = db.data.users.filter((user) => phones.includes(user.phone));
+  // A mistyped number would otherwise delete the very customer it meant to keep.
+  const missing = phones.filter((phone) => !kept.some((user) => user.phone === phone));
+  if (missing.length > 0) return res.status(400).json({ error: `No customer has the number ${missing.join(', ')}.` });
+
+  const keptIds = new Set(kept.map((user) => user.id));
+  const keepsUser = (entry) => keptIds.has(entry.userId);
+  const keepsOrder = (order) => (order.userId ? keptIds.has(order.userId) : phones.includes(order.customer?.phone));
+  const orders = db.data.orders.filter(keepsOrder);
+  const keptOrderIds = new Set(orders.map((order) => order.id));
+
+  const snapshotId = await saveResetSnapshot({
+    takenAt: new Date().toISOString(),
+    kind: 'purge-test-data',
+    keepPhones: phones,
+    orders: db.data.orders,
+    subscriptions: db.data.subscriptions,
+    users: db.data.users,
+    deviceTokens: db.data.deviceTokens || [],
+    walletEntries: db.data.walletEntries || [],
+    feedback: db.data.feedback || []
+  });
+
+  const removed = {
+    orders: db.data.orders.length - orders.length,
+    users: db.data.users.length - kept.length,
+    subscriptions: db.data.subscriptions.filter((entry) => !keepsUser(entry)).length
+  };
+  db.data.orders = orders;
+  db.data.users = kept;
+  db.data.sessions = db.data.sessions.filter(keepsUser);
+  db.data.subscriptions = db.data.subscriptions.filter(keepsUser);
+  db.data.passwordResetRequests = (db.data.passwordResetRequests || []).filter(keepsUser);
+  db.data.walletEntries = (db.data.walletEntries || []).filter(keepsUser);
+  db.data.feedback = (db.data.feedback || []).filter(keepsUser);
+  db.data.deviceTokens = (db.data.deviceTokens || []).filter((entry) =>
+    entry.isAdmin || keepsUser(entry) || (!entry.userId && keptOrderIds.has(entry.orderId)));
+  // A referrer who was test data can no longer be rewarded.
+  for (const user of kept) {
+    if (user.referredBy && !keptIds.has(user.referredBy)) delete user.referredBy;
+  }
+
+  await db.write();
+  res.json({ ...removed, kept: kept.map((user) => user.name), snapshotId });
+});
+
 // GET /api/admin/password-reset-requests - list open reset requests
 app.get('/api/admin/password-reset-requests', async (req, res) => {
   if (req.headers['x-admin-key'] !== ADMIN_KEY) return res.status(403).json({ error: 'Invalid admin key.' });
