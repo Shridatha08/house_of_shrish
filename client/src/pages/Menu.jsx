@@ -4,6 +4,7 @@ import { getMenu, getStoreConfig } from '../api';
 import { useCart } from '../context/CartContext';
 import PromoMarquee from '../components/PromoMarquee';
 import { isMealPackage, isMonthlyPlan, isWeeklyPlan } from '../mealPlans';
+import { availableSingleMealServices as servicesOpenNow, boxImage, boxSlug, hasMealBoxes } from '../mealBoxes';
 import fssaiLogo from '../../../fssai.png';
 import mealsImg from '../../../meals.png';
 import ladooImg from '../../../ladoo.png';
@@ -27,6 +28,33 @@ function planLabel(name) {
 function priceOf(item, option) {
   const variant = item.variants?.find((entry) => entry.label === option) || item.variants?.[0];
   return variant?.price ?? item.price;
+}
+
+// Image-and-name tiles for each meal box; prices and the menu live on the box page.
+function BoxSection({ title, section, item }) {
+  return (
+    <div className="box-section">
+      <div className="menu-card-heading">
+        <span className="veg-badge" title="Pure Veg" />
+        <h3>{title}</h3>
+      </div>
+      <div className="box-tiles">
+        {item.variants.map((variant) => {
+          const image = boxImage(variant.label);
+          const to = `/box/${section}/${boxSlug(variant.label)}`;
+          return (
+            <div key={variant.label} className="box-tile">
+              <Link to={to} className="box-tile-image" aria-label={variant.label}>
+                {image ? <img src={image} alt="" /> : <span className="meal-box-placeholder" aria-hidden="true">🍱</span>}
+              </Link>
+              <p className="box-tile-name">{variant.label}</p>
+              <Link to={to} className="btn-view-more">View more</Link>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 function CustomisationPicker({ item, selected, onSelect, hideLabel }) {
@@ -87,15 +115,7 @@ export default function Menu() {
   }, []);
 
   function availableSingleMealServices() {
-    if (storeConfig.singleMealClosedToday) return [];
-    const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(clock));
-    const current = `${parts.find((part) => part.type === 'hour').value}:${parts.find((part) => part.type === 'minute').value}`;
-    const lunchOpen = current < (storeConfig.lunchCutoffTime || '11:00');
-    const dinnerOpen = current < (storeConfig.dinnerCutoffTime || '18:00');
-    if (lunchOpen && dinnerOpen) return ['lunch', 'dinner'];
-    if (lunchOpen) return ['lunch'];
-    if (dinnerOpen) return ['dinner'];
-    return [];
+    return servicesOpenNow(storeConfig, new Date(clock));
   }
 
   function mealServiceFor(item) {
@@ -129,6 +149,9 @@ export default function Menu() {
   function renderPackageCard({ plans, selectedId, onSelectPlan, title, description, note, unit }) {
     const selectedPlan = plans.find((p) => p.id === selectedId) || plans[0];
     if (!selectedPlan) return null;
+    if (hasMealBoxes(selectedPlan)) {
+      return <BoxSection title={title} section={unit === 'week' ? 'weekly' : 'monthly'} item={selectedPlan} />;
+    }
     return (
       <div className="menu-card monthly-package-card">
         <div className="menu-card-body">
@@ -219,7 +242,9 @@ export default function Menu() {
               />
             )}
             <div className="menu-grid">
-              {regularItems.map((item) => (
+              {regularItems.map((item) => hasMealBoxes(item) ? (
+                <BoxSection key={item.id} title={item.name} section="single" item={item} />
+              ) : (
                 <div key={item.id} className="menu-card">
                   <div className="menu-card-body">
                     <div className="menu-card-heading">

@@ -44,6 +44,24 @@ const LADOO_DELIVERY_TIERS = [
 ];
 const LADOO_DELIVERY_CHARGE = LADOO_DELIVERY_TIERS.at(-1).charge;
 
+// What goes into each meal box. "daily" dishes come from the admin's weekly menu.
+const MEAL_BOX_CONTENTS = [
+  { label: 'Royal Nourish Box', fixedItems: ['3 Roti', 'Curd', 'Vegetable/Fruit Salad'], dailyItems: ['curry', 'rice'] },
+  { label: 'Chapati Nourish Box', fixedItems: ['3 Roti', 'Vegetable/Fruit Salad'], dailyItems: ['curry'] },
+  { label: 'Rice Nourish Box', fixedItems: ['Vegetable/Fruit Salad'], dailyItems: ['curry', 'rice'] }
+];
+const WEEKLY_MENU_DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+const WEEKLY_MENU_DISH_MAX = 60;
+
+// Always returns every day and service, so clients never see a partial menu.
+function normalizeWeeklyMenu(raw) {
+  const dish = (value) => (typeof value === 'string' ? value.trim().slice(0, WEEKLY_MENU_DISH_MAX) : '');
+  return Object.fromEntries(WEEKLY_MENU_DAYS.map((day) => [day, Object.fromEntries(['lunch', 'dinner'].map((service) => {
+    const entry = raw?.[day]?.[service];
+    return [service, { curry: dish(entry?.curry), rice: dish(entry?.rice) }];
+  }))]));
+}
+
 function ladooDeliveryCharge(distanceKm) {
   return LADOO_DELIVERY_TIERS.find((tier) => tier.upToKm === null || distanceKm <= tier.upToKm).charge;
 }
@@ -1791,8 +1809,35 @@ app.get('/api/store-config', async (req, res) => {
     ladooDeliveryTiers: LADOO_DELIVERY_TIERS,
     singleMealClosedToday: !isWorkingDay(todayISTStr(), subscriptionHolidays(db.data)),
     onlinePayment: onlinePaymentActive(settings),
-    upiId: settings.upiId
+    upiId: settings.upiId,
+    mealBoxes: MEAL_BOX_CONTENTS,
+    weeklyMenu: normalizeWeeklyMenu(settings.weeklyMenu)
   });
+});
+
+// PUT /api/admin/weekly-menu - set the repeating Mon-Sat curry and rice for lunch and dinner
+app.put('/api/admin/weekly-menu', async (req, res) => {
+  if (req.headers['x-admin-key'] !== ADMIN_KEY) return res.status(403).json({ error: 'Invalid admin key.' });
+  const input = req.body?.weeklyMenu;
+  if (!input || typeof input !== 'object') return res.status(400).json({ error: 'Weekly menu is required.' });
+  for (const day of WEEKLY_MENU_DAYS) {
+    for (const service of ['lunch', 'dinner']) {
+      for (const field of ['curry', 'rice']) {
+        const value = input[day]?.[service]?.[field];
+        if (value !== undefined && value !== null && typeof value !== 'string') {
+          return res.status(400).json({ error: 'Dish names must be text.' });
+        }
+        if (typeof value === 'string' && value.trim().length > WEEKLY_MENU_DISH_MAX) {
+          return res.status(400).json({ error: `Dish names can be at most ${WEEKLY_MENU_DISH_MAX} characters.` });
+        }
+      }
+    }
+  }
+  const db = await getDb();
+  const weeklyMenu = normalizeWeeklyMenu(input);
+  db.data.settings = { ...getSettings(db.data), weeklyMenu };
+  await db.write();
+  res.json({ weeklyMenu });
 });
 
 // PATCH /api/admin/menu/:id - update price, availability and daily stock
@@ -1932,7 +1977,8 @@ app.patch('/api/admin/settings', async (req, res) => {
     onlinePaymentEnabled,
     upiId
   };
-  db.data.settings = updates;
+  // The weekly menu has its own endpoint, so keep it when other settings change.
+  db.data.settings = settings.weeklyMenu ? { ...updates, weeklyMenu: settings.weeklyMenu } : updates;
   await db.write();
   res.json({ ...updates, onlinePaymentAvailable: YOUPI_CONFIGURED });
 });

@@ -409,3 +409,19 @@ test('weekly meals never offer a skip or a cutoff reason', () => {
   assert.equal(entry.skippable, false);
   assert.deepEqual(skipAvailability(entry), { canSkip: false, reason: '' });
 });
+
+test('meal box pages show each box its own dishes from the weekly menu', async () => {
+  const { boxSlug, defaultDayIndex, deliveryWindow, dishesFor, hasMealBoxes } = await import('../src/mealBoxes.js');
+  const config = { weeklyMenu: { tue: { lunch: { curry: ' Lauki Sabji ', rice: 'Jeera Rice' }, dinner: { curry: '', rice: '' } } } };
+  assert.deepEqual(dishesFor(config, 'Royal Nourish Box', 'tue', 'lunch').map((dish) => dish.name), ['Lauki Sabji', 'Jeera Rice']);
+  assert.deepEqual(dishesFor(config, 'Chapati Nourish Box', 'tue', 'lunch').map((dish) => dish.name), ['Lauki Sabji']);
+  assert.deepEqual(dishesFor(config, 'Rice Nourish Box', 'tue', 'dinner').map((dish) => [dish.title, dish.name]), [['Vegetable curry', ''], ['Flavourful rice', '']]);
+  assert.equal(boxSlug('Chapati Nourish Box'), 'chapati-nourish-box');
+  assert.equal(deliveryWindow(['11:00-13:00', '18:00-20:00'], 1), '6:00 PM – 8:00 PM');
+  assert.equal(deliveryWindow([], 0), null);
+  assert.equal(hasMealBoxes({ variants: [{ label: '100g', price: 129 }] }), false);
+  // Saturday falls back to Monday for the Mon-Fri weekly package.
+  const saturday = new Date('2026-11-21T06:00:00Z');
+  assert.equal(defaultDayIndex(6, saturday), 5);
+  assert.equal(defaultDayIndex(5, saturday), 0);
+});

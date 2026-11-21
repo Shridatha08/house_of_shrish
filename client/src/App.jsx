@@ -6,6 +6,7 @@ import { getMySubscriptions } from './api'
 import { GSTIN } from './gst'
 import Menu from './pages/Menu'
 import Checkout from './pages/Checkout'
+import MealBox from './pages/MealBox'
 import Payment from './pages/Payment'
 import Login from './pages/Login'
 import EventsCalendar from './pages/EventsCalendar'
@@ -87,6 +88,7 @@ function App() {
         <main className="app-main">
           <Routes>
             <Route path="/" element={<Menu />} />
+            <Route path="/box/:section/:box" element={<MealBox />} />
             <Route path="/checkout" element={<Checkout />} />
             <Route path="/payment/:id" element={<Payment />} />
             <Route path="/login" element={<Login />} />

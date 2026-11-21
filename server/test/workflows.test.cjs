@@ -66,7 +66,7 @@ function application(data = fixture(), { env = {}, fetch } = {}) {  let state = 
   const notifications = [];
   const snapshots = [];
   const app = { use() {}, set() {}, listen() {} };
-  for (const method of ['get', 'post', 'patch', 'delete']) {
+  for (const method of ['get', 'post', 'put', 'patch', 'delete']) {
     app[method] = (route, ...handlers) => routes.set(`${method}:${route}`, handlers.at(-1));
   }
   const express = () => app;
@@ -3051,4 +3051,29 @@ test('the sweep can cancel lapsed orders one at a time', async () => {
   assert.equal((await app.context.cancelLapsedOrders(await app.context.getDb(), 1)).length, 1);
   assert.equal((await app.context.cancelLapsedOrders(await app.context.getDb(), 1)).length, 0);
   assert.equal(app.state().orders.filter((order) => order.status === 'cancelled').length, 2);
+});
+
+test('the admin sets a repeating weekly menu that customers see and settings saves keep', async () => {
+  const app = application();
+  const empty = (await app.request('get', '/api/store-config')).body;
+  assert.equal(empty.weeklyMenu.mon.lunch.curry, '');
+  assert.deepEqual(Object.keys(empty.weeklyMenu), ['mon', 'tue', 'wed', 'thu', 'fri', 'sat']);
+  assert.deepEqual(Array.from(empty.mealBoxes, (box) => box.label), ['Royal Nourish Box', 'Chapati Nourish Box', 'Rice Nourish Box']);
+
+  assert.equal((await app.request('put', '/api/admin/weekly-menu', { weeklyMenu: {} })).code, 403);
+  const tooLong = await app.request('put', '/api/admin/weekly-menu', { weeklyMenu: { mon: { lunch: { curry: 'x'.repeat(61) } } } }, {}, adminHeaders);
+  assert.equal(tooLong.code, 400);
+
+  const saved = await app.request('put', '/api/admin/weekly-menu', {
+    weeklyMenu: { tue: { lunch: { curry: ' Lauki Tomato Sabji ', rice: 'Jeera Rice' }, dinner: { curry: 'Palak Paneer' } }, sun: { lunch: { curry: 'ignored' } } }
+  }, {}, adminHeaders);
+  assert.equal(saved.code, 200);
+  assert.equal(saved.body.weeklyMenu.tue.lunch.curry, 'Lauki Tomato Sabji');
+  assert.equal(saved.body.weeklyMenu.tue.dinner.rice, '');
+  assert.equal(saved.body.weeklyMenu.sun, undefined);
+
+  await app.request('patch', '/api/admin/settings', { subscriptionWorkingDays: 24 }, {}, adminHeaders);
+  const config = (await app.request('get', '/api/store-config')).body;
+  assert.equal(config.weeklyMenu.tue.lunch.rice, 'Jeera Rice');
+  assert.equal(config.weeklyMenu.tue.dinner.curry, 'Palak Paneer');
 });

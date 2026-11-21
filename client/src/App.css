@@ -2350,3 +2350,256 @@ button.subscription-calendar-day:disabled {
   color: #2e7d32;
   font-weight: 600;
 }
+
+/* Meal box tiles on the menu */
+.box-section {
+  grid-column: 1 / -1;
+  margin-top: 8px;
+}
+
+.box-tiles {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(170px, 1fr);
+  gap: 12px;
+  overflow-x: auto;
+  padding: 10px 2px 6px;
+  scroll-snap-type: x mandatory;
+}
+
+.box-tile {
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border: 1px solid #eee;
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  scroll-snap-align: start;
+}
+
+.box-tile-image {
+  display: block;
+  text-decoration: none;
+  aspect-ratio: 4 / 3;
+  background: linear-gradient(135deg, #f7efdc, #e9d7a8);
+}
+
+.box-tile-image img,
+.meal-box-hero img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.meal-box-placeholder {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  font-size: 2.6rem;
+}
+
+.box-tile-name {
+  flex: 1;
+  margin: 10px 12px 8px;
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+
+.btn-view-more {
+  margin: 0 10px 10px;
+  text-align: center;
+  background: #fdece4;
+  color: #e8552d;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.btn-view-more:hover {
+  background: #e8552d;
+  color: #fff;
+}
+
+/* Meal box page */
+.meal-box-page {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 12px 16px 32px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.meal-box-hero {
+  margin-top: 12px;
+  border-radius: 18px;
+  overflow: hidden;
+  aspect-ratio: 16 / 10;
+  background: linear-gradient(135deg, #f7efdc, #e9d7a8);
+}
+
+.meal-box-hero .meal-box-placeholder {
+  font-size: 4rem;
+}
+
+.meal-box-title {
+  margin: 16px 0 2px;
+}
+
+.meal-box-section {
+  margin: 0 0 8px;
+  color: #777;
+  font-weight: 600;
+}
+
+.meal-box-kicker {
+  margin: 14px 0 8px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #8a7f74;
+}
+
+.meal-box-days {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.day-chip {
+  border: 1px solid #e5d9d0;
+  background: #fff;
+  border-radius: 999px;
+  padding: 7px 16px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.day-chip.active {
+  background: #2e7d32;
+  border-color: #2e7d32;
+  color: #fff;
+}
+
+.meal-box-day-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 1.15rem;
+  font-weight: 600;
+  margin: 18px 0 10px;
+}
+
+.veg-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #2e7d32;
+}
+
+.meal-box-services {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.service-card {
+  background: #fff;
+  border: 1px solid rgba(224, 137, 43, 0.45);
+  border-radius: 16px;
+  padding: 14px;
+}
+
+.service-dinner {
+  border-color: rgba(91, 95, 199, 0.45);
+}
+
+.service-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #eee;
+}
+
+.service-card-name {
+  font-weight: 700;
+  font-size: 1.05rem;
+}
+
+.service-card-time {
+  background: #f7efdc;
+  border-radius: 8px;
+  padding: 3px 9px;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.dish-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #f7efdc;
+  border-radius: 10px;
+  padding: 9px 12px;
+  margin-bottom: 6px;
+}
+
+.dish-pending {
+  color: #8a7f74;
+}
+
+.fixed-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.fixed-item {
+  border: 1px solid #e5e0da;
+  border-radius: 10px;
+  padding: 5px 10px;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.meal-box-order {
+  position: sticky;
+  bottom: 0;
+  margin-top: 18px;
+  background: #fff;
+  border-top: 1px solid #eee;
+  border-radius: 16px 16px 0 0;
+  box-shadow: 0 -4px 14px rgba(0, 0, 0, 0.06);
+  padding: 12px 14px 14px;
+}
+
+.meal-box-order .menu-price {
+  margin: 0 0 8px;
+}
+
+.customisation-options.row {
+  flex-direction: row;
+  flex-wrap: wrap;
+}
+
+.meal-box-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.meal-box-cart-link {
+  color: #e8552d;
+  font-weight: 700;
+  text-decoration: none;
+  font-size: 0.9rem;
+}
