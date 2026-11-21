@@ -6,7 +6,6 @@ import PromoMarquee from '../components/PromoMarquee';
 import { isMealPackage, isMonthlyPlan, isWeeklyPlan } from '../mealPlans';
 import { availableSingleMealServices as servicesOpenNow, boxImage, boxSlug, hasMealBoxes } from '../mealBoxes';
 import fssaiLogo from '../../../fssai.png';
-import mealsImg from '../../../meals.png';
 import ladooImg from '../../../ladoo.png';
 import phoneIcon from '../../../phone-call.png';
 import whatsappIcon from '../../../whatsapp.png';
@@ -14,7 +13,6 @@ import instagramIcon from '../../../instagram.png';
 import goGreenIcon from '../../../go-green.png';
 
 const CATEGORY_BANNERS = {
-  'Pure Veg Meals': mealsImg,
   'Artisanal Sweets': ladooImg
 };
 

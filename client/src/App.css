@@ -2360,7 +2360,8 @@ button.subscription-calendar-day:disabled {
 .box-tiles {
   display: grid;
   grid-auto-flow: column;
-  grid-auto-columns: minmax(170px, 1fr);
+  /* Two tiles and a peek of the third, so the row reads as scrollable. */
+  grid-auto-columns: calc((100% - 12px) / 2.3);
   gap: 12px;
   overflow-x: auto;
   padding: 10px 2px 6px;
@@ -2598,7 +2599,12 @@ button.subscription-calendar-day:disabled {
 }
 
 .meal-box-cart-link {
-  color: #e8552d;
+  flex: 1;
+  text-align: center;
+  background: #e8552d;
+  color: #fff;
+  border-radius: 8px;
+  padding: 9px 14px;
   font-weight: 700;
   text-decoration: none;
   font-size: 0.9rem;
