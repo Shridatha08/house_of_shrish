@@ -17,13 +17,6 @@ export const SECTIONS = {
   monthly: { title: 'Monthly Package', note: 'Monday to Saturday', unit: 'month', days: 6 }
 };
 
-// Photos bundled so far, keyed by box label; the rest show a placeholder.
-const BOX_IMAGES = {};
-
-export function boxImage(label) {
-  return BOX_IMAGES[label] || null;
-}
-
 // "Royal Nourish Box" -> "royal-nourish-box", used in /box/:section/:box.
 export function boxSlug(label) {
   return String(label).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');

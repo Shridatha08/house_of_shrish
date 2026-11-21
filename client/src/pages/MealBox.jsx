@@ -7,7 +7,6 @@ import { isMealPackage, isMonthlyPlan, isWeeklyPlan } from '../mealPlans';
 import {
   availableSingleMealServices,
   boxContents,
-  boxImage,
   boxSlug,
   DAY_LONG,
   DAY_SHORT,
@@ -17,6 +16,7 @@ import {
   SECTIONS,
   WEEK_DAYS
 } from '../mealBoxes';
+import { boxImage } from '../boxImages';
 
 function planLabel(name) {
   const match = name.match(/\(([^)]+)\)/);
