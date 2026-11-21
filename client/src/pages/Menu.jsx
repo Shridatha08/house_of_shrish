@@ -322,15 +322,6 @@ export default function Menu() {
               ))}
 
               {renderPackageCard({
-                plans: monthlyPlans,
-                selectedId: selectedPlanId,
-                onSelectPlan: setSelectedPlanId,
-                title: 'Monthly Package',
-                description: 'Choose Lunch, Dinner, or both for the whole month.',
-                unit: 'month'
-              })}
-
-              {renderPackageCard({
                 plans: weeklyPlans,
                 selectedId: selectedWeeklyPlanId,
                 onSelectPlan: setSelectedWeeklyPlanId,
@@ -338,6 +329,15 @@ export default function Menu() {
                 description: 'Choose Lunch, Dinner, or both for a week.',
                 note: '5 days, Monday to Friday · starts on a Monday · no skips',
                 unit: 'week'
+              })}
+
+              {renderPackageCard({
+                plans: monthlyPlans,
+                selectedId: selectedPlanId,
+                onSelectPlan: setSelectedPlanId,
+                title: 'Monthly Package',
+                description: 'Choose Lunch, Dinner, or both for the whole month.',
+                unit: 'month'
               })}
             </div>
           </section>
