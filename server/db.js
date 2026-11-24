@@ -15,7 +15,10 @@ const MEAL_BOX_PRICES = {
   4: [9899, 7099, 7099],
   7: [975, 689, 689],
   8: [975, 689, 689],
-  9: [1949, 1369, 1369]
+  9: [1949, 1369, 1369],
+  10: [1170, 827, 827],
+  11: [1170, 827, 827],
+  12: [2339, 1643, 1643]
 };
 
 function mealItem(id, name) {
@@ -29,9 +32,12 @@ const defaultData = {
     mealItem(2, 'Monthly (Lunch)'),
     mealItem(3, 'Monthly (Dinner)'),
     mealItem(4, 'Monthly (Lunch + Dinner)'),
-    mealItem(7, 'Weekly (Lunch)'),
-    mealItem(8, 'Weekly (Dinner)'),
-    mealItem(9, 'Weekly (Lunch + Dinner)'),
+    mealItem(7, 'Work Week (Lunch)'),
+    mealItem(8, 'Work Week (Dinner)'),
+    mealItem(9, 'Work Week (Lunch + Dinner)'),
+    mealItem(10, 'Weekly (Lunch)'),
+    mealItem(11, 'Weekly (Dinner)'),
+    mealItem(12, 'Weekly (Lunch + Dinner)'),
     {
       id: 6,
       name: 'Dry Fruits Ladoo',
@@ -237,9 +243,20 @@ function reconcileMenu(menu) {
     }
   }
 
-  // Weekly packages arrived after launch, so existing databases gain them
-  // here; prices the admin changes later are left alone.
+  // The 5-day packages (7-9) were first sold as "Weekly"; they are now the
+  // Work Week plan, and 10-12 are the 6-day Weekly plan.
   for (const id of [7, 8, 9]) {
+    const existingItem = menu.find((item) => item.id === id);
+    const shipped = defaultData.menu.find((item) => item.id === id);
+    if (existingItem && existingItem.name !== shipped.name) {
+      existingItem.name = shipped.name;
+      changed = true;
+    }
+  }
+
+  // Packages added after launch reach existing databases here; prices the
+  // admin changes later are left alone.
+  for (const id of [7, 8, 9, 10, 11, 12]) {
     if (menu.some((item) => item.id === id)) continue;
     const weekly = defaultData.menu.find((item) => item.id === id);
     const ladooIndex = menu.findIndex((item) => item.id === 6);

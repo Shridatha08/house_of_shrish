@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { getMenu, getStoreConfig } from '../api';
 import { useCart } from '../context/CartContext';
 import BackToMenu from '../components/BackToMenu';
-import { isMealPackage, isMonthlyPlan, isWeeklyPlan } from '../mealPlans';
+import { isMealPackage, isMonthlyPlan, isWeeklyPlan, isWorkWeekPlan } from '../mealPlans';
 import {
   availableSingleMealServices,
   boxContents,
@@ -24,6 +24,7 @@ function planLabel(name) {
 }
 
 function itemsFor(menu, section) {
+  if (section === 'workweek') return menu.filter(isWorkWeekPlan);
   if (section === 'weekly') return menu.filter(isWeeklyPlan);
   if (section === 'monthly') return menu.filter(isMonthlyPlan);
   return menu.filter((item) => item.name.toLowerCase() === 'single meal');

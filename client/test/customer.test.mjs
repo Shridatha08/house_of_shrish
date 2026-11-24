@@ -9,7 +9,7 @@ import { statusOf, skipAvailability, scheduleByDate, upcomingTotals, planSummary
 import { feedbackError, thanksFor } from '../src/feedback.js';
 import { formatCountdown, isPaymentUrgent, orderStatusText, paymentWindowClosed, timeLeftToPay, PAYMENT_WINDOW_MS } from '../src/paymentWindow.js';
 import { dryFruitsLadooDeliveryCharge, ladooDeliveryNote } from '../src/delivery.js';
-import { isMealPackage, isMonday, isMonthlyPlan, isSkippable, isWeeklyPlan, istToday, nextMonday, planName, subscriptionPlan } from '../src/mealPlans.js';
+import { isMealPackage, isMonthlyPlan, isSkippable, isWeeklyPlan, isWorkWeekPlan, istToday, planDaysNote, planName, subscriptionPlan } from '../src/mealPlans.js';
 
 const subWith = (overrides = {}) => ({
   carryForwardDeadline: '2026-11-20',
@@ -371,13 +371,21 @@ test('meal packages are recognised by name prefix', () => {
   assert.equal(isWeeklyPlan({ name: 'Monthly (Lunch)' }), false);
   assert.equal(isMonthlyPlan({ name: 'monthly (Lunch + Dinner)' }), true);
   assert.equal(isMealPackage({ name: 'Weekly (Lunch + Dinner)' }), true);
+  assert.equal(isWorkWeekPlan({ name: 'Work Week (Lunch)' }), true);
+  assert.equal(isWeeklyPlan({ name: 'Work Week (Lunch)' }), false);
+  assert.equal(isMealPackage({ name: 'Work Week (Dinner)' }), true);
   assert.equal(isMealPackage({ name: 'Single Meal' }), false);
   assert.equal(isMealPackage(null), false);
 });
 
 test('subscriptions report their plan and whether they can be skipped', () => {
   assert.equal(subscriptionPlan({ plan: 'weekly', itemName: 'Monthly (Lunch)' }), 'weekly');
-  assert.equal(subscriptionPlan({ itemName: 'Weekly (Dinner)' }), 'weekly');
+  // Old "Weekly" subscriptions without a plan ran Mon–Fri, like Work Week.
+  assert.equal(subscriptionPlan({ itemName: 'Weekly (Dinner)' }), 'workweek');
+  assert.equal(subscriptionPlan({ plan: 'workweek' }), 'workweek');
+  assert.equal(planName({ plan: 'workweek' }), 'Work Week');
+  assert.equal(planDaysNote({ plan: 'weekly' }), 'Weekly plan · 6 days, Monday to Saturday');
+  assert.equal(isSkippable({ plan: 'workweek' }), false);
   assert.equal(subscriptionPlan({ itemName: 'Monthly (Dinner)' }), 'monthly');
   assert.equal(planName({ plan: 'weekly' }), 'Weekly');
   assert.equal(planName({ plan: 'monthly' }), 'Monthly');
@@ -387,16 +395,7 @@ test('subscriptions report their plan and whether they can be skipped', () => {
   assert.equal(isSkippable({ itemName: 'Monthly (Lunch)' }), true);
 });
 
-test('weekly packages start on the next Monday', () => {
-  assert.equal(isMonday('2026-11-02'), true);
-  assert.equal(isMonday('2026-11-01'), false);
-  assert.equal(isMonday('2026-02-30'), false);
-  assert.equal(isMonday(''), false);
-  assert.equal(nextMonday('2026-11-02'), '2026-11-02');
-  assert.equal(nextMonday('2026-11-01'), '2026-11-02');
-  assert.equal(nextMonday('2026-11-03'), '2026-11-09');
-  assert.equal(nextMonday('2026-12-29'), '2027-01-04');
-  assert.equal(nextMonday('nope'), '');
+test('IST today rolls over at midnight India time', () => {
   assert.equal(istToday(new Date('2026-11-01T19:00:00Z')), '2026-11-02');
 });
 

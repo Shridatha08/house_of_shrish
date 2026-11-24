@@ -22,8 +22,9 @@ function fixture() {
       { id: 1, name: 'Single Meal', category: 'Pure Veg Meals', price: 129, customisations: ['Meal A', 'Meal B'] },
       { id: 2, name: 'Monthly (Lunch)', category: 'Pure Veg Meals', price: 3299, customisations: ['Meal A', 'Meal B'] },
       { id: 4, name: 'Monthly (Lunch + Dinner)', category: 'Pure Veg Meals', price: 5499, customisations: ['Meal A', 'Meal B'] },
-      { id: 7, name: 'Weekly (Lunch)', category: 'Pure Veg Meals', price: 749, customisations: ['Meal A', 'Meal B'] },
-      { id: 9, name: 'Weekly (Lunch + Dinner)', category: 'Pure Veg Meals', price: 1499, customisations: ['Meal A', 'Meal B'] },
+      { id: 7, name: 'Work Week (Lunch)', category: 'Pure Veg Meals', price: 749, customisations: ['Meal A', 'Meal B'] },
+      { id: 9, name: 'Work Week (Lunch + Dinner)', category: 'Pure Veg Meals', price: 1499, customisations: ['Meal A', 'Meal B'] },
+      { id: 10, name: 'Weekly (Lunch)', category: 'Pure Veg Meals', price: 899, customisations: ['Meal A', 'Meal B'] },
       { id: 6, name: 'Dry Fruits Ladoo', category: 'Artisanal Sweets', price: 129, variants: [{ label: '100g', price: 129 }, { label: '500g', price: 699 }] }
     ]
   };
@@ -2900,36 +2901,58 @@ async function approvedWeekly(app, itemId = 7, extra = {}) {
   return { created, subId };
 }
 
-test('weekly packages start on a Monday and run Monday to Friday', async () => {
+test('work week packages start on any day and run Monday to Friday for 5 days', async () => {
   const app = application();
-  const tuesday = await purchase(app, 7, { subscriptionStartDate: '2026-10-13' });
-  assert.equal(tuesday.code, 400);
-  assert.match(tuesday.body.error, /Monday/);
-
-  const { created } = await approvedWeekly(app);
+  // 2026-10-10 is a Saturday, so the plan starts on the following Wednesday.
+  const { created } = await approvedWeekly(app, 7, { subscriptionStartDate: '2026-10-14' });
   assert.equal(created.code, 201);
   assert.equal(created.body.order.items[0].price, 749);
   const subscription = app.state().subscriptions[0];
-  assert.equal(subscription.startDate, '2026-10-12');
+  assert.equal(subscription.startDate, '2026-10-14');
   assert.equal(subscription.workingDaysRequired, 5);
+  assert.equal(subscription.planKind, 'workweek');
+
+  const [mine] = (await app.request('get', '/api/subscriptions/me')).body;
+  assert.equal(mine.plan, 'workweek');
+  assert.equal(mine.skippable, false);
+  // Saturday and Sunday are skipped.
+  assert.deepEqual([...mine.schedule.map((entry) => entry.date)], ['2026-10-14', '2026-10-15', '2026-10-16', '2026-10-19', '2026-10-20']);
+  assert.ok(mine.schedule.every((entry) => entry.canCancel === false));
+  assert.equal(mine.endDate, '2026-10-20');
+});
+
+test('weekly packages start on any day and run Monday to Saturday for 6 days', async () => {
+  const data = fixture();
+  data.holidays = [{ id: 1, date: '2026-10-16', name: 'Festival' }];
+  const app = application(data);
+  const { created } = await approvedWeekly(app, 10, { subscriptionStartDate: '2026-10-14' });
+  assert.equal(created.code, 201);
+  const subscription = app.state().subscriptions[0];
+  assert.equal(subscription.workingDaysRequired, 6);
+  assert.equal(subscription.planKind, 'weekly');
 
   const [mine] = (await app.request('get', '/api/subscriptions/me')).body;
   assert.equal(mine.plan, 'weekly');
   assert.equal(mine.skippable, false);
-  assert.deepEqual([...mine.schedule.map((entry) => entry.date)], ['2026-10-12', '2026-10-13', '2026-10-14', '2026-10-15', '2026-10-16']);
-  assert.ok(mine.schedule.every((entry) => entry.canCancel === false));
-  assert.equal(mine.endDate, '2026-10-16');
+  // Saturday is served; the holiday and Sunday move meals on, not lose them.
+  assert.deepEqual([...mine.schedule.map((entry) => entry.date)], ['2026-10-14', '2026-10-15', '2026-10-17', '2026-10-19', '2026-10-20', '2026-10-21']);
+  assert.equal(mine.endDate, '2026-10-21');
+  assert.equal(mine.carryForwardDeadline, '2026-10-21');
+
+  const skip = await app.request('post', '/api/subscriptions/:id/skip', { date: '2026-10-20', meal: 'lunch' }, { id: subscription.id });
+  assert.equal(skip.code, 409);
 });
 
-test('a holiday in a weekly package adds the next weekday, skipping Saturday', async () => {
+test('weekly subscriptions sold before the 6-day plan keep running Monday to Friday', async () => {
   const data = fixture();
-  data.holidays = [{ id: 1, date: '2026-10-14', name: 'Festival' }];
+  data.subscriptions = [{
+    id: 'legacy', userId: 1, approved: true, itemName: 'Weekly (Lunch)', startDate: '2026-10-12',
+    workingDaysRequired: 5, skippedMeals: [], mealSlots: ['lunch']
+  }];
   const app = application(data);
-  await approvedWeekly(app, 9);
   const [mine] = (await app.request('get', '/api/subscriptions/me')).body;
-  assert.deepEqual([...new Set(mine.schedule.map((entry) => entry.date))], ['2026-10-12', '2026-10-13', '2026-10-15', '2026-10-16', '2026-10-19']);
-  assert.equal(mine.remainingMeals, 10);
-  assert.equal(mine.endDate, '2026-10-19');
+  assert.equal(mine.plan, 'workweek');
+  assert.equal(mine.endDate, '2026-10-16');
 });
 
 test('customers cannot skip weekly meals', async () => {
@@ -2951,21 +2974,18 @@ test('a weekly and a monthly plan cannot cover the same meal', async () => {
   assert.match(overlap.body.error, /lunch/);
 });
 
-test('admins can add a weekly package only from a Monday', async () => {
+test('admins can add a work week package from any day', async () => {
   const app = application();
-  const body = (startDate) => ({ userId: 1, itemId: 9, startDate });
-  assert.equal((await app.request('post', '/api/admin/subscriptions', body('2026-10-14'), {}, adminHeaders)).code, 400);
-  const added = await app.request('post', '/api/admin/subscriptions', body('2026-10-19'), {}, adminHeaders);
+  const added = await app.request('post', '/api/admin/subscriptions', { userId: 1, itemId: 9, startDate: '2026-10-14' }, {}, adminHeaders);
   assert.equal(added.code, 201);
   assert.equal(added.body.workingDaysRequired, 5);
-  assert.equal(added.body.endDate, '2026-10-23');
-  const moved = (startDate) => app.request('patch', '/api/admin/subscriptions/:id', { startDate }, { id: added.body.id }, adminHeaders);
-  assert.equal((await moved('2026-10-21')).code, 400);
-  assert.equal((await moved('2026-10-26')).code, 200);
-  assert.equal(app.state().subscriptions[0].startDate, '2026-10-26');
+  assert.equal(added.body.endDate, '2026-10-20');
+  const moved = await app.request('patch', '/api/admin/subscriptions/:id', { startDate: '2026-10-22' }, { id: added.body.id }, adminHeaders);
+  assert.equal(moved.code, 200);
+  assert.equal(app.state().subscriptions[0].startDate, '2026-10-22');
 });
 
-test('a late weekly approval moves the start to the next Monday', async () => {
+test('a late work week approval starts from the next serviceable day, not a Monday', async () => {
   const app = application();
   const created = await purchase(app, 7);
   const id = created.body.order.id;
@@ -2973,7 +2993,7 @@ test('a late weekly approval moves the start to the next Monday', async () => {
   await app.request('patch', '/api/admin/orders/:id/status', { status: 'paid' }, { id }, adminHeaders);
   app.clock('2026-10-13T04:00:00Z');
   await app.request('patch', '/api/admin/subscriptions/:id/approve', {}, { id: app.state().subscriptions[0].id }, adminHeaders);
-  assert.equal(app.state().subscriptions[0].startDate, '2026-10-19');
+  assert.equal(app.state().subscriptions[0].startDate, '2026-10-13');
 });
 
 async function sweep(app) {

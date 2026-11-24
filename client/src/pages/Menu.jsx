@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { getMenu, getStoreConfig } from '../api';
 import { useCart } from '../context/CartContext';
 import PromoMarquee from '../components/PromoMarquee';
-import { isMealPackage, isMonthlyPlan, isWeeklyPlan } from '../mealPlans';
+import { isMealPackage, isMonthlyPlan, isWeeklyPlan, isWorkWeekPlan } from '../mealPlans';
 import { availableSingleMealServices as servicesOpenNow, boxSlug, hasMealBoxes } from '../mealBoxes';
 import { boxImage } from '../boxImages';
 import fssaiLogo from '../../../fssai.png';
@@ -100,6 +100,7 @@ export default function Menu() {
   const [selectedMealService, setSelectedMealService] = useState({});
   const [selectedPlanId, setSelectedPlanId] = useState(null);
   const [selectedWeeklyPlanId, setSelectedWeeklyPlanId] = useState(null);
+  const [selectedWorkWeekPlanId, setSelectedWorkWeekPlanId] = useState(null);
   const [clock, setClock] = useState(() => Date.now());
   const { items, addItem, decreaseItem, total, count, makeKey } = useCart();
 
@@ -145,11 +146,11 @@ export default function Menu() {
     return items.find((i) => i.key === key)?.quantity || 0;
   };
 
-  function renderPackageCard({ plans, selectedId, onSelectPlan, title, description, note, unit }) {
+  function renderPackageCard({ plans, selectedId, onSelectPlan, title, description, note, unit, section }) {
     const selectedPlan = plans.find((p) => p.id === selectedId) || plans[0];
     if (!selectedPlan) return null;
     if (hasMealBoxes(selectedPlan)) {
-      return <BoxSection title={title} section={unit === 'week' ? 'weekly' : 'monthly'} item={selectedPlan} />;
+      return <BoxSection title={title} section={section} item={selectedPlan} />;
     }
     return (
       <div className="menu-card monthly-package-card">
@@ -227,6 +228,7 @@ export default function Menu() {
       {categories.map((category) => {
         const categoryItems = menu.filter((item) => item.category === category);
         const monthlyPlans = categoryItems.filter(isMonthlyPlan);
+        const workWeekPlans = categoryItems.filter(isWorkWeekPlan);
         const weeklyPlans = categoryItems.filter(isWeeklyPlan);
         const regularItems = categoryItems.filter((item) => !isMealPackage(item));
 
@@ -323,13 +325,25 @@ export default function Menu() {
               ))}
 
               {renderPackageCard({
+                plans: workWeekPlans,
+                selectedId: selectedWorkWeekPlanId,
+                onSelectPlan: setSelectedWorkWeekPlanId,
+                title: 'Work Week Plan',
+                description: 'Choose Lunch, Dinner, or both for 5 days.',
+                note: 'Monday to Friday · start any day · no skips',
+                unit: '5 days',
+                section: 'workweek'
+              })}
+
+              {renderPackageCard({
                 plans: weeklyPlans,
                 selectedId: selectedWeeklyPlanId,
                 onSelectPlan: setSelectedWeeklyPlanId,
-                title: 'Weekly Package',
-                description: 'Choose Lunch, Dinner, or both for a week.',
-                note: '5 days, Monday to Friday · starts on a Monday · no skips',
-                unit: 'week'
+                title: 'Weekly Plan',
+                description: 'Choose Lunch, Dinner, or both for 6 days.',
+                note: 'Monday to Saturday · start any day · no skips',
+                unit: 'week',
+                section: 'weekly'
               })}
 
               {renderPackageCard({
@@ -338,7 +352,8 @@ export default function Menu() {
                 onSelectPlan: setSelectedPlanId,
                 title: 'Monthly Package',
                 description: 'Choose Lunch, Dinner, or both for the whole month.',
-                unit: 'month'
+                unit: 'month',
+                section: 'monthly'
               })}
             </div>
           </section>

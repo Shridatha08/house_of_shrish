@@ -920,34 +920,38 @@ function todayISTStr() {
 }
 
 // Meal packages are recognised by name, as the menu always has been:
-// "Monthly (…)" runs for the configured working days (Mon–Sat), "Weekly (…)"
-// for five weekdays (Mon–Fri) starting on a Monday, with no customer skips.
-const WEEKLY_PLAN_DAYS = 5;
+// "Monthly (…)" runs for the configured working days (Mon–Sat), "Work Week (…)"
+// for 5 days (Mon–Fri) and "Weekly (…)" for 6 days (Mon–Sat). The short plans
+// start on any day and cannot be skipped.
+const SHORT_PLAN_DAYS = { workweek: 5, weekly: 6 };
 
 function mealPlanKind(name) {
   const lower = String(name || '').toLowerCase();
   if (lower.startsWith('monthly')) return 'monthly';
+  if (lower.startsWith('work week')) return 'workweek';
   if (lower.startsWith('weekly')) return 'weekly';
   return null;
+}
+
+function isShortPlan(kind) {
+  return kind === 'workweek' || kind === 'weekly';
+}
+
+// Subscriptions sold before the 6-day Weekly plan were "Weekly" by name but
+// ran Mon–Fri, so they keep that unless they record their own kind.
+function subscriptionPlanKind(subscription) {
+  if (subscription.planKind) return subscription.planKind;
+  const kind = mealPlanKind(subscription.itemName);
+  return kind === 'weekly' ? 'workweek' : kind;
 }
 
 function isMealPlan(name) {
   return mealPlanKind(name) !== null;
 }
 
-function isMonday(dateStr) {
-  return isValidDateString(dateStr) && new Date(`${dateStr}T00:00:00Z`).getUTCDay() === 1;
-}
-
-/// Today when it is a Monday, otherwise the coming Monday (IST).
-function nextMondayIST() {
-  const cursor = new Date(`${todayISTStr()}T00:00:00Z`);
-  while (cursor.getUTCDay() !== 1) cursor.setUTCDate(cursor.getUTCDate() + 1);
-  return cursor.toISOString().slice(0, 10);
-}
 
 function planWorkingDays(name, settings) {
-  return mealPlanKind(name) === 'weekly' ? WEEKLY_PLAN_DAYS : settings.subscriptionWorkingDays;
+  return SHORT_PLAN_DAYS[mealPlanKind(name)] ?? settings.subscriptionWorkingDays;
 }
 
 function getSubscriptionMealSlots(itemName) {
@@ -975,28 +979,31 @@ function canCancelSubscriptionMeal(date, meal) {
 
 // Holidays and kitchen failures both cost the customer delivery days they did
 // not choose to lose, so each pushes the deadline out.
-function subscriptionCarryForwardDeadline(startDate, originalEndDate, holidays, extraWorkingDays = 0, weekly = false) {
+function subscriptionCarryForwardDeadline(startDate, originalEndDate, holidays, extraWorkingDays = 0, weekly = false, weekdaysOnly = false) {
   const original = new Date(`${originalEndDate}T00:00:00Z`);
   const monthStart = new Date(Date.UTC(original.getUTCFullYear(), original.getUTCMonth() + 1, 1));
   const lastDay = new Date(Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() + 1, 0)).getUTCDate();
   monthStart.setUTCDate(Math.min(original.getUTCDate(), lastDay));
-  // Weekly plans have no customer skips to make room for, so their only grace
-  // is for kitchen-failure days, counted below.
+  // Weekly and Work Week plans have no customer skips to make room for. Their
+  // end date already steps over holidays, so their only grace is for
+  // kitchen-failure days, counted below.
   const baseDeadline = weekly ? originalEndDate : monthStart.toISOString().slice(0, 10);
-  const holidayDates = [...new Set(holidays.map((holiday) => holiday.date))]
-    .filter((date) => isValidDateString(date) && date >= startDate)
-    .sort();
   const deadline = new Date(`${baseDeadline}T00:00:00Z`);
-  for (const date of holidayDates) {
-    if (date > deadline.toISOString().slice(0, 10)) break;
-    deadline.setUTCDate(deadline.getUTCDate() + 1);
+  if (!weekly) {
+    const holidayDates = [...new Set(holidays.map((holiday) => holiday.date))]
+      .filter((date) => isValidDateString(date) && date >= startDate)
+      .sort();
+    for (const date of holidayDates) {
+      if (date > deadline.toISOString().slice(0, 10)) break;
+      deadline.setUTCDate(deadline.getUTCDate() + 1);
+    }
   }
   // Counted in working days: a Sunday on the end would deliver nothing.
   let remaining = Math.max(0, extraWorkingDays);
   let guard = 0;
   while (remaining > 0 && guard++ < 400) {
     deadline.setUTCDate(deadline.getUTCDate() + 1);
-    if (isWorkingDay(deadline.toISOString().slice(0, 10), holidays, weekly)) remaining--;
+    if (isWorkingDay(deadline.toISOString().slice(0, 10), holidays, weekdaysOnly)) remaining--;
   }
   return deadline.toISOString().slice(0, 10);
 }
@@ -1007,13 +1014,15 @@ function buildSubscriptionSchedule(subscription, holidays) {
   const mealSlots = Array.isArray(subscription.mealSlots) && subscription.mealSlots.length
     ? ['lunch', 'dinner'].filter((meal) => subscription.mealSlots.includes(meal))
     : getSubscriptionMealSlots(subscription.itemName);
-  const weekly = mealPlanKind(subscription.itemName) === 'weekly';
-  const plan = weekly ? 'weekly' : 'monthly';
+  const plan = subscriptionPlanKind(subscription) || 'monthly';
+  const weekly = isShortPlan(plan);
+  // Only the Work Week plan takes Saturdays off.
+  const weekdaysOnly = plan === 'workweek';
   if (subscription.deactivated || !isValidDateString(subscription.startDate) || !Number.isInteger(requiredDays) || requiredDays < 1) {
     return { plan, skippable: false, mealSlots, schedule: [], endDate: null, daysRemaining: 0, remainingMeals: 0, expiresToday: false, expired: true };
   }
 
-  const originalEndDate = computeSubscriptionEndDate(subscription.startDate, requiredDays, holidays, weekly);
+  const originalEndDate = computeSubscriptionEndDate(subscription.startDate, requiredDays, holidays, weekdaysOnly);
   if (!originalEndDate) {
     return { plan, skippable: false, mealSlots, schedule: [], endDate: null, daysRemaining: 0, remainingMeals: 0, expiresToday: false, expired: true };
   }
@@ -1027,7 +1036,8 @@ function buildSubscriptionSchedule(subscription, holidays) {
     originalEndDate,
     holidays,
     Math.ceil(maintenance.size / mealSlots.length),
-    weekly
+    weekly,
+    weekdaysOnly
   );
 
   const requiredMeals = requiredDays * mealSlots.length;
@@ -1042,7 +1052,7 @@ function buildSubscriptionSchedule(subscription, holidays) {
   for (let offset = 0; offset < maxDays; offset++) {
     const date = cursor.toISOString().slice(0, 10);
     if (date > carryForwardDeadline) break;
-    if (isWorkingDay(date, holidays, weekly)) {
+    if (isWorkingDay(date, holidays, weekdaysOnly)) {
       for (const meal of mealSlots) {
         if (scheduledMeals >= requiredMeals) break;
         const key = `${date}:${meal}`;
@@ -2004,8 +2014,8 @@ app.post('/api/subscriptions/:id/skip', async (req, res) => {
 
   const subscription = db.data.subscriptions.find((entry) => entry.id === req.params.id && entry.userId === user.id);
   if (!subscription || !subscription.approved) return res.status(404).json({ error: 'Active subscription not found.' });
-  if (mealPlanKind(subscription.itemName) === 'weekly') {
-    return res.status(409).json({ error: 'Weekly packages cannot be skipped.' });
+  if (isShortPlan(subscriptionPlanKind(subscription))) {
+    return res.status(409).json({ error: 'Weekly and Work Week packages cannot be skipped.' });
   }
 
   const { date, meal } = req.body || {};
@@ -2053,8 +2063,8 @@ app.post('/api/subscriptions/:id/skip-range', async (req, res) => {
 
   const subscription = db.data.subscriptions.find((entry) => entry.id === req.params.id && entry.userId === user.id);
   if (!subscription || !subscription.approved) return res.status(404).json({ error: 'Active subscription not found.' });
-  if (mealPlanKind(subscription.itemName) === 'weekly') {
-    return res.status(409).json({ error: 'Weekly packages cannot be skipped.' });
+  if (isShortPlan(subscriptionPlanKind(subscription))) {
+    return res.status(409).json({ error: 'Weekly and Work Week packages cannot be skipped.' });
   }
 
   const { fromDate, toDate, meals } = req.body || {};
@@ -2150,12 +2160,9 @@ app.post('/api/admin/subscriptions', async (req, res) => {
   if (!user) return res.status(404).json({ error: 'Registered user not found.' });
   const menuItem = db.data.menu.find((item) => item.id === Number(itemId));
   if (!menuItem || !isMealPlan(menuItem.name)) {
-    return res.status(400).json({ error: 'Choose a monthly or weekly package.' });
+    return res.status(400).json({ error: 'Choose a monthly, weekly or work week package.' });
   }
   if (!isValidDateString(startDate)) return res.status(400).json({ error: 'Start date must be a valid YYYY-MM-DD date.' });
-  if (mealPlanKind(menuItem.name) === 'weekly' && !isMonday(startDate)) {
-    return res.status(400).json({ error: 'Weekly packages start on a Monday.' });
-  }
   const coverageConflict = planCoverageConflict(db.data, user.id, [menuItem]);
   if (coverageConflict) return res.status(409).json({ error: coverageConflict });
 
@@ -2164,6 +2171,7 @@ app.post('/api/admin/subscriptions', async (req, res) => {
     userId: user.id,
     orderId: null,
     itemName: menuItem.name,
+    planKind: mealPlanKind(menuItem.name),
     customisation: menuItem.variants?.[0]?.label || menuItem.customisations?.[0] || '',
     mealSlots: getSubscriptionMealSlots(menuItem.name),
     startDate,
@@ -2196,9 +2204,6 @@ app.patch('/api/admin/subscriptions/:id', async (req, res) => {
   if (startDate !== undefined) {
     if (!isValidDateString(startDate)) {
       return res.status(400).json({ error: 'Start date must be in YYYY-MM-DD format.' });
-    }
-    if (mealPlanKind(subscription.itemName) === 'weekly' && !isMonday(startDate)) {
-      return res.status(400).json({ error: 'Weekly packages start on a Monday.' });
     }
     subscription.startDate = startDate;
   }
@@ -2327,11 +2332,6 @@ app.patch('/api/admin/subscriptions/:id/approve', async (req, res) => {
     const slots = getSubscriptionMealSlots(subscription.itemName);
     const start = new Date(`${today}T00:00:00Z`);
     if (slots.some((meal) => !canCancelSubscriptionMeal(today, meal))) start.setUTCDate(start.getUTCDate() + 1);
-    // A weekly plan always runs Monday to Friday, so a late approval moves it
-    // to the next Monday rather than starting mid-week.
-    if (mealPlanKind(subscription.itemName) === 'weekly') {
-      while (start.getUTCDay() !== 1) start.setUTCDate(start.getUTCDate() + 1);
-    }
     const earliestDate = start.toISOString().slice(0, 10);
     if (subscription.startDate < earliestDate) subscription.startDate = earliestDate;
     subscription.approvedAt = new Date().toISOString();
@@ -2763,13 +2763,9 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
     const coverageConflict = planCoverageConflict(db.data, user.id, monthlyItems);
     if (coverageConflict) return res.status(409).json({ error: coverageConflict });
   }
-  const hasWeeklyPlan = items.some((line) => mealPlanKind(menuById.get(Number(line.id))?.name) === 'weekly');
-  const preferredStartDate = subscriptionStartDate ?? (hasWeeklyPlan ? nextMondayIST() : todayISTStr());
+  const preferredStartDate = subscriptionStartDate ?? todayISTStr();
   if (requiresAccount && (!isValidDateString(preferredStartDate) || preferredStartDate < todayISTStr())) {
     return res.status(400).json({ error: 'Choose a valid subscription start date from today onward (IST).' });
-  }
-  if (hasWeeklyPlan && !isMonday(preferredStartDate)) {
-    return res.status(400).json({ error: 'Weekly packages start on a Monday. Choose a Monday start date.' });
   }
 
   let total = 0;
@@ -2911,6 +2907,7 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
           userId: user.id,
           orderId: order.id,
           itemName: item.name,
+          planKind: mealPlanKind(item.name),
           customisation: item.customisation,
           mealSlots: getSubscriptionMealSlots(item.name),
           startDate,

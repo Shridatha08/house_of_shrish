@@ -8,7 +8,7 @@ import { walletSplit } from '../wallet';
 import { CGST_RATE, SGST_RATE, formatRupees, gstBreakdown } from '../gst';
 import LocationPicker from '../components/LocationPicker';
 import { dryFruitsLadooDeliveryCharge, ladooDeliveryNote } from '../delivery';
-import { WEEKLY_START_MESSAGE, isMealPackage, isMonday, isWeeklyPlan, nextMonday } from '../mealPlans';
+import { isMealPackage } from '../mealPlans';
 
 const DEFAULT_DELIVERY_CONFIG = {
   kitchenLat: 12.9744129,
@@ -78,9 +78,7 @@ export default function Checkout() {
   const split = walletSplit({ total: totalWithDelivery, balance: walletBalance, useWallet });
 
   const requiresAccount = items.some(isMealPackage);
-  const hasWeeklyPlan = items.some(isWeeklyPlan);
-  // Weekly packages must start on a Monday, so the default moves onto one.
-  const earliestStartDate = hasWeeklyPlan ? nextMonday(todayIST()) : todayIST();
+  const earliestStartDate = todayIST();
   const subscriptionStartDate = chosenStartDate || earliestStartDate;
   const blockedByAuth = requiresAccount && !user;
 
@@ -127,10 +125,6 @@ export default function Checkout() {
     }
     if (requiresAccount && (!subscriptionStartDate || subscriptionStartDate < todayIST())) {
       setError('Choose a subscription start date from today onward.');
-      return;
-    }
-    if (hasWeeklyPlan && !isMonday(subscriptionStartDate)) {
-      setError(WEEKLY_START_MESSAGE);
       return;
     }
     if (hasDryFruitsLadoo && !storeConfigLoaded) {
@@ -311,15 +305,9 @@ export default function Checkout() {
               type="date"
               value={subscriptionStartDate}
               min={earliestStartDate}
-              step={hasWeeklyPlan ? 7 : undefined}
               onChange={(event) => setChosenStartDate(event.target.value)}
               required
             />
-            {hasWeeklyPlan && (
-              <span className={isMonday(subscriptionStartDate) ? 'status-text' : 'status-text error'}>
-                Weekly packages start on a Monday.
-              </span>
-            )}
           </label>
         )}
         <div className="location-section">

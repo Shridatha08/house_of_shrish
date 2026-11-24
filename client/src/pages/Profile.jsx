@@ -8,7 +8,7 @@ import FaqPanel from '../components/FaqPanel';
 import Icon from '../components/Icon';
 import DeadlineWarning from '../components/DeadlineWarning';
 import MealPlanPanel from '../components/MealPlanPanel';
-import { isSkippable, planName } from '../mealPlans';
+import { isSkippable, planDaysNote, planName } from '../mealPlans';
 import FeedbackPanel from '../components/FeedbackPanel';
 import { formatMealDate, mealLabel, mealKey, planSummary } from '../schedule';
 import { orderStatusText } from '../paymentWindow';
@@ -248,7 +248,7 @@ export default function Profile() {
                 </p>
                 {sub.carryForwardDeadline && <p className="subscription-summary-dates">Carry-forward deadline: {formatMealDate(sub.carryForwardDeadline)}</p>}
                 <DeadlineWarning subscription={sub} />
-                {!isSkippable(sub) && <p className="subscription-summary-dates">Weekly plan · Monday to Friday · meals cannot be skipped</p>}
+                {!isSkippable(sub) && <p className="subscription-summary-dates">{planDaysNote(sub)} · meals cannot be skipped</p>}
                 {!sub.expired && (
                   <p className="subscription-days-remaining">
                     {sub.daysRemaining === 0 ? 'Ends today' : `${sub.daysRemaining} day${sub.daysRemaining === 1 ? '' : 's'} remaining`}

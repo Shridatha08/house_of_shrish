@@ -21,7 +21,7 @@ import {
   issueAdminPasswordResetKey,
   addAdminSubscription
 } from '../api';
-import { isMealPackage, isMonday, isSkippable, isWeeklyPlan, planName, subscriptionPlan } from '../mealPlans';
+import { isMealPackage, isSkippable, isWeeklyPlan, isWorkWeekPlan, planName } from '../mealPlans';
 
 const ADMIN_KEY_STORAGE = 'houseOfShrishAdminKey';
 
@@ -203,10 +203,6 @@ export default function AdminHolidays() {
 
   async function handleSaveSubscription(sub) {
     setSubsError('');
-    if (subscriptionPlan(sub) === 'weekly' && !isMonday(editValue(sub, 'startDate'))) {
-      setSubsError('Weekly packages start on a Monday.');
-      return;
-    }
     setSavingSubId(sub.id);
     try {
       const updated = await updateAdminSubscription(
@@ -247,11 +243,6 @@ export default function AdminHolidays() {
     event.preventDefault();
     setManualSubscriptionError('');
     setManualSubscriptionSaved(false);
-    const manualItem = menuItems.find((item) => item.id === Number(manualItemId));
-    if (isWeeklyPlan(manualItem) && !isMonday(manualStartDate)) {
-      setManualSubscriptionError('Weekly packages start on a Monday.');
-      return;
-    }
     setAddingManualSubscription(true);
     try {
       const subscription = await addAdminSubscription({
@@ -379,7 +370,9 @@ export default function AdminHolidays() {
     );
   }
 
-  const manualWeekly = isWeeklyPlan(menuItems.find((item) => item.id === Number(manualItemId)));
+  const manualItem = menuItems.find((item) => item.id === Number(manualItemId));
+  const manualWorkWeek = isWorkWeekPlan(manualItem);
+  const manualWeekly = isWeeklyPlan(manualItem);
 
   return (
     <div className="events-page">
@@ -387,7 +380,7 @@ export default function AdminHolidays() {
       <h2>Subscription Settings</h2>
       <form className="checkout-form" onSubmit={handleSaveSettings}>
         <label>
-          Monthly subscription duration (working days, excludes Sundays &amp; kitchen-closed days). Weekly packages are always 5 weekdays, Monday to Friday.
+          Monthly subscription duration (working days, excludes Sundays &amp; kitchen-closed days). Work Week plans are always 5 days (Monday to Friday) and Weekly plans 6 days (Monday to Saturday).
           <input
             type="number"
             min={1}
@@ -560,11 +553,12 @@ export default function AdminHolidays() {
         <label>
           Start date
           <input type="date" value={manualStartDate} onChange={(event) => setManualStartDate(event.target.value)} required />
-          {manualWeekly && <span className={isMonday(manualStartDate) ? 'status-text' : 'status-text error'}>Weekly packages start on a Monday.</span>}
         </label>
         <p className="status-text">
-          {manualWeekly
-            ? 'This offline subscription will be marked approved for 5 weekdays, Monday to Friday.'
+          {manualWorkWeek
+            ? 'This offline subscription will be marked approved for 5 days, Monday to Friday.'
+            : manualWeekly
+            ? 'This offline subscription will be marked approved for 6 days, Monday to Saturday.'
             : `This offline subscription will be marked approved for ${workingDays || 'configured'} working days.`}
         </p>
         {manualSubscriptionError && <p className="status-text error">{manualSubscriptionError}</p>}

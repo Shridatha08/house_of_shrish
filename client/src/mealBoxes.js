@@ -13,7 +13,8 @@ export const DEFAULT_MEAL_BOXES = [
 
 export const SECTIONS = {
   single: { title: 'Single Meal', note: null, unit: 'meal', days: 6 },
-  weekly: { title: 'Weekly Package', note: 'Monday to Friday', unit: 'week', days: 5 },
+  workweek: { title: 'Work Week Plan', note: '5 days, Monday to Friday', unit: '5 days', days: 5 },
+  weekly: { title: 'Weekly Plan', note: '6 days, Monday to Saturday', unit: 'week', days: 6 },
   monthly: { title: 'Monthly Package', note: 'Monday to Saturday', unit: 'month', days: 6 }
 };
 

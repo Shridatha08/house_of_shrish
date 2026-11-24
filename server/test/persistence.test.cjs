@@ -343,9 +343,12 @@ test('menu items are reconciled back to the shipped definitions', async () => {
   assert.equal(single.price, 199);
   assert.ok(first.data.menu.some((item) => item.id === 6), 'missing items are restored');
   assert.deepEqual(
-    first.data.menu.filter((item) => [7, 8, 9].includes(item.id)).map((item) => [item.name, item.price]),
-    [['Weekly (Lunch)', 975], ['Weekly (Dinner)', 975], ['Weekly (Lunch + Dinner)', 1949]],
-    'weekly packages are added to an existing menu'
+    first.data.menu.filter((item) => [7, 8, 9, 10, 11, 12].includes(item.id)).map((item) => [item.name, item.price]),
+    [
+      ['Work Week (Lunch)', 975], ['Work Week (Dinner)', 975], ['Work Week (Lunch + Dinner)', 1949],
+      ['Weekly (Lunch)', 1170], ['Weekly (Dinner)', 1170], ['Weekly (Lunch + Dinner)', 2339]
+    ],
+    'work week and weekly packages are added to an existing menu'
   );
 
   const second = await adapter.getDb();
