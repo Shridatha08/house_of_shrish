@@ -18,7 +18,6 @@ import {
   DAY_LONG,
   DAY_SHORT,
   defaultDayIndex,
-  deliveryWindow,
   dishesFor,
   SECTIONS,
   WEEK_DAYS,
@@ -147,13 +146,10 @@ export default function MealBox() {
 
       <h2 className="meal-box-day-title"><span className="veg-dot" />{DAY_LONG[day]}&apos;s Menu</h2>
       <div className="meal-box-services">
-        {['lunch', 'dinner'].map((name, index) => (
+        {['lunch', 'dinner'].map((name) => (
           <div key={name} className={`service-card service-${name}`}>
             <div className="service-card-head">
               <span className="service-card-name">{name === 'lunch' ? '☀️ Lunch' : '🌙 Dinner'}</span>
-              {deliveryWindow(storeConfig.deliveryTimeSlots, index) && (
-                <span className="service-card-time">{deliveryWindow(storeConfig.deliveryTimeSlots, index)}</span>
-              )}
             </div>
             <p className="meal-box-kicker">Main course</p>
             {dishesFor(storeConfig, label, WEEK_DAYS[day], name).map((dish) => (
