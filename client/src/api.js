@@ -76,6 +76,10 @@ export const deleteAccount = (token) =>
 
 export const getHolidays = () => request('/api/holidays');
 
+// Settles a holiday added to a paid Work Week: 'carry' or 'refund'.
+export const chooseHolidayOption = (subscriptionId, payload, token) =>
+  request(`/api/subscriptions/${subscriptionId}/holiday-choice`, { method: 'POST', body: JSON.stringify(payload), headers: authHeaders(token) });
+
 export const getWallet = (token) =>
   request('/api/wallet', { headers: authHeaders(token) });
 

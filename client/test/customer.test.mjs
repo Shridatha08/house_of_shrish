@@ -424,3 +424,19 @@ test('meal box pages show each box its own dishes from the weekly menu', async (
   assert.equal(defaultDayIndex(6, saturday), 5);
   assert.equal(defaultDayIndex(5, saturday), 0);
 });
+
+test('work week prices drop by a per-day share for holidays already set', async () => {
+  const { closedDates, defaultWorkWeekMonday, holidayNote, mondayAfter, workWeekFor, workWeekPerDay, workWeekPrice } = await import('../src/mealBoxes.js');
+  assert.equal(workWeekPrice(975, 4), 780);
+  assert.equal(workWeekPrice(689, 4), 552);
+  assert.equal(workWeekPrice(689, 5), 689);
+  assert.equal(mondayAfter('2026-11-30'), '2026-12-07');
+  const closed = closedDates([{ date: '2026-12-02' }], { kitchenClosedDates: ['2026-12-07', '2026-12-08', '2026-12-09', '2026-12-10', '2026-12-11'] });
+  assert.deepEqual(workWeekFor('2026-11-30', closed).holidays, ['2026-12-02']);
+  // The fully closed week is skipped when picking a default.
+  assert.equal(defaultWorkWeekMonday('2026-12-01', closed), '2026-12-14');
+  assert.equal(
+    holidayNote(['2026-12-02'], 975, workWeekPerDay(975), 'meal'),
+    'This week has a holiday on Wed 2 Dec, so the amount is reduced from ₹975 to ₹780 (₹195/meal).'
+  );
+});

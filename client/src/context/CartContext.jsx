@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { isMealPackage } from '../mealPlans';
+import { workWeekPrice } from '../mealBoxes';
 
 const CartContext = createContext(null);
 
@@ -21,10 +22,12 @@ export function CartProvider({ children }) {
     sessionStorage.setItem('houseOfShrishCart', JSON.stringify(items));
   }, [items]);
 
-  function addItem(menuItem, customisation, mealService) {
+  // `week` is a Work Week plan's { startDate, days }, which set its price.
+  function addItem(menuItem, customisation, mealService, week) {
     const key = makeKey(menuItem.id, customisation, mealService);
     const variant = menuItem.variants?.find((option) => option.label === customisation);
-    const price = variant?.price ?? menuItem.price;
+    const fullPrice = variant?.price ?? menuItem.price;
+    const price = week ? workWeekPrice(fullPrice, week.days) : fullPrice;
     setItems((prev) => {
       if (isMealPackage(menuItem) && prev.some((item) => item.id === menuItem.id)) return prev;
       const existing = prev.find((i) => i.key === key);
@@ -42,7 +45,8 @@ export function CartProvider({ children }) {
           price,
           quantity: 1,
           customisation: customisation || '',
-          ...(mealService ? { mealService } : {})
+          ...(mealService ? { mealService } : {}),
+          ...(week ? { startDate: week.startDate, days: week.days } : {})
         }
       ];
     });

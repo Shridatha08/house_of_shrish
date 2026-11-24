@@ -13,7 +13,7 @@ import FeedbackPanel from '../components/FeedbackPanel';
 import { formatMealDate, mealLabel, mealKey, planSummary } from '../schedule';
 import { orderStatusText } from '../paymentWindow';
 import { formatRupees } from '../gst';
-import { updateProfile, getMySubscriptions, getMyOrders, cancelOrder, requestRefund, skipSubscriptionMeal, skipSubscriptionRange, deleteAccount, getWallet, getStoreConfig } from '../api';
+import { chooseHolidayOption, updateProfile, getMySubscriptions, getMyOrders, cancelOrder, requestRefund, skipSubscriptionMeal, skipSubscriptionRange, deleteAccount, getWallet, getStoreConfig } from '../api';
 
 export default function Profile() {
   const { user, token, ready, updateUser, clearSession, logout } = useAuth();
@@ -109,6 +109,17 @@ export default function Profile() {
       setOrderError(err.message);
     } finally {
       setUpdatingOrderId(null);
+    }
+  }
+
+  async function settleHoliday(subscription, date, choice) {
+    setSkipError('');
+    try {
+      const updated = await chooseHolidayOption(subscription.id, { date, choice }, token);
+      setSubscriptions((previous) => previous.map((entry) => entry.id === updated.id ? updated : entry));
+      if (choice === 'refund') getWallet(token).then(setWallet).catch(() => {});
+    } catch (err) {
+      setSkipError(err.message);
     }
   }
 
@@ -249,6 +260,18 @@ export default function Profile() {
                 {sub.carryForwardDeadline && <p className="subscription-summary-dates">Carry-forward deadline: {formatMealDate(sub.carryForwardDeadline)}</p>}
                 <DeadlineWarning subscription={sub} />
                 {!isSkippable(sub) && <p className="subscription-summary-dates">{planDaysNote(sub)} · meals cannot be skipped</p>}
+                {(sub.pendingHolidayChoices || []).map((holiday) => (
+                  <div key={holiday.date} className="holiday-choice">
+                    <p>
+                      <strong>Kitchen holiday on {formatMealDate(holiday.date)}.</strong> That meal will be served on the next
+                      working day, or you can have ₹{holiday.refundAmount} back in your wallet instead.
+                    </p>
+                    <div className="holiday-choice-actions">
+                      <button type="button" className="btn-secondary" onClick={() => settleHoliday(sub, holiday.date, 'carry')}>Move my meal</button>
+                      <button type="button" className="btn-primary" onClick={() => settleHoliday(sub, holiday.date, 'refund')}>Refund ₹{holiday.refundAmount}</button>
+                    </div>
+                  </div>
+                ))}
                 {!sub.expired && (
                   <p className="subscription-days-remaining">
                     {sub.daysRemaining === 0 ? 'Ends today' : `${sub.daysRemaining} day${sub.daysRemaining === 1 ? '' : 's'} remaining`}

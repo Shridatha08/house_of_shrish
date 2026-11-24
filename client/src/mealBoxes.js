@@ -76,3 +76,58 @@ export function availableSingleMealServices(storeConfig, now = new Date()) {
   if (dinnerOpen) return ['dinner'];
   return [];
 }
+
+// A Work Week plan covers one Monday–Friday week. Holidays already set for
+// that week aren't sold: the customer pays a per-day share for the rest,
+// rounded the same way as the server.
+export const WORK_WEEK_DAYS = 5;
+
+export const workWeekPerDay = (fullPrice) => Math.round(Number(fullPrice) / WORK_WEEK_DAYS);
+
+// A full week keeps the listed price, so rounding never turns ₹689 into ₹690.
+export const workWeekPrice = (fullPrice, days) =>
+  days >= WORK_WEEK_DAYS ? Number(fullPrice) : workWeekPerDay(fullPrice) * days;
+
+const shiftDate = (ymd, days) => {
+  const date = new Date(`${ymd}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+};
+
+export const isMondayDate = (ymd) => /^\d{4}-\d{2}-\d{2}$/.test(String(ymd)) && new Date(`${ymd}T00:00:00Z`).getUTCDay() === 1;
+
+// The Monday strictly after the given date.
+export function mondayAfter(ymd) {
+  let date = shiftDate(ymd, 1);
+  while (!isMondayDate(date)) date = shiftDate(date, 1);
+  return date;
+}
+
+export const workWeekDates = (monday) => Array.from({ length: WORK_WEEK_DAYS }, (_, index) => shiftDate(monday, index));
+
+// The kitchen's closed dates: admin holidays plus closed days in settings.
+export const closedDates = (holidays, storeConfig) =>
+  new Set([...(holidays || []).map((holiday) => holiday.date), ...(storeConfig?.kitchenClosedDates || [])]);
+
+export function workWeekFor(monday, closed) {
+  const dates = workWeekDates(monday);
+  return { monday, days: dates.filter((date) => !closed.has(date)), holidays: dates.filter((date) => closed.has(date)) };
+}
+
+// The first Monday after today with at least one day the kitchen is open.
+export function defaultWorkWeekMonday(today, closed) {
+  let monday = mondayAfter(today);
+  for (let i = 0; i < 26 && workWeekFor(monday, closed).days.length === 0; i++) monday = mondayAfter(monday);
+  return monday;
+}
+
+const dayLabel = (ymd) => new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' }).format(new Date(`${ymd}T00:00:00Z`));
+
+// "This week has a holiday on Wed 2 Dec, so the amount is reduced from ₹975 to ₹780 (₹195/meal)."
+export function holidayNote(holidays, fullPrice, perDay, per) {
+  if (holidays.length === 0) return '';
+  const days = holidays.map(dayLabel);
+  const when = days.length === 1 ? `a holiday on ${days[0]}` : `holidays on ${days.slice(0, -1).join(', ')} and ${days.at(-1)}`;
+  const price = workWeekPrice(fullPrice, WORK_WEEK_DAYS - holidays.length);
+  return `This week has ${when}, so the amount is reduced from ₹${fullPrice} to ₹${price} (₹${perDay}/${per}).`;
+}

@@ -2901,24 +2901,78 @@ async function approvedWeekly(app, itemId = 7, extra = {}) {
   return { created, subId };
 }
 
-test('work week packages start on any day and run Monday to Friday for 5 days', async () => {
+test('work week packages start on a Monday and run Monday to Friday', async () => {
   const app = application();
-  // 2026-10-10 is a Saturday, so the plan starts on the following Wednesday.
-  const { created } = await approvedWeekly(app, 7, { subscriptionStartDate: '2026-10-14' });
+  const wednesday = await purchase(app, 7, { subscriptionStartDate: '2026-10-14' });
+  assert.equal(wednesday.code, 400);
+  assert.match(wednesday.body.error, /Monday/);
+
+  const { created } = await approvedWeekly(app, 7, { subscriptionStartDate: '2026-10-12' });
   assert.equal(created.code, 201);
   assert.equal(created.body.order.items[0].price, 749);
+  assert.equal(created.body.order.items[0].days, 5);
   const subscription = app.state().subscriptions[0];
-  assert.equal(subscription.startDate, '2026-10-14');
   assert.equal(subscription.workingDaysRequired, 5);
   assert.equal(subscription.planKind, 'workweek');
+  assert.equal(subscription.perDayPrice, 150);
 
   const [mine] = (await app.request('get', '/api/subscriptions/me')).body;
   assert.equal(mine.plan, 'workweek');
   assert.equal(mine.skippable, false);
-  // Saturday and Sunday are skipped.
-  assert.deepEqual([...mine.schedule.map((entry) => entry.date)], ['2026-10-14', '2026-10-15', '2026-10-16', '2026-10-19', '2026-10-20']);
-  assert.ok(mine.schedule.every((entry) => entry.canCancel === false));
-  assert.equal(mine.endDate, '2026-10-20');
+  assert.deepEqual([...mine.schedule.map((entry) => entry.date)], ['2026-10-12', '2026-10-13', '2026-10-14', '2026-10-15', '2026-10-16']);
+  assert.deepEqual([...mine.pendingHolidayChoices], []);
+});
+
+test('a work week with a holiday already set is priced per day for the days served', async () => {
+  const data = fixture();
+  data.holidays = [{ id: 1, date: '2026-10-14', name: 'Festival' }];
+  data.settings.kitchenClosedDates = ['2026-10-26', '2026-10-27', '2026-10-28', '2026-10-29', '2026-10-30'];
+  const app = application(data);
+
+  const closedWeek = await purchase(app, 7, { subscriptionStartDate: '2026-10-26' });
+  assert.equal(closedWeek.code, 400);
+  assert.match(closedWeek.body.error, /closed all of that week/);
+
+  // A per-line start date wins over the order's.
+  const created = await app.request('post', '/api/orders', {
+    items: [{ id: 7, quantity: 1, customisation: 'Meal A', startDate: '2026-10-12' }], customer, subscriptionStartDate: '2026-10-13'
+  });
+  assert.equal(created.code, 201);
+  assert.equal(created.body.order.items[0].price, 600);
+  assert.equal(created.body.order.items[0].days, 4);
+  const subscription = app.state().subscriptions[0];
+  assert.equal(subscription.startDate, '2026-10-12');
+  assert.equal(subscription.workingDaysRequired, 4);
+  assert.deepEqual(Array.from(subscription.knownHolidayDates), ['2026-10-14']);
+});
+
+test('a holiday added after paying lets the customer carry the meal forward or take a refund', async () => {
+  const app = application();
+  const { subId } = await approvedWeekly(app, 7, { subscriptionStartDate: '2026-10-19' });
+  for (const [index, date] of ['2026-10-21', '2026-10-22'].entries()) {
+    // Holiday ids come from the clock.
+    app.clock(`2026-10-10T04:00:0${index}Z`);
+    assert.equal((await app.request('post', '/api/holidays', { date, name: 'Festival' }, {}, adminHeaders)).code, 201);
+  }
+  assert.ok(app.notifications.some((entry) => entry.audience === 'user' && entry.data?.type === 'holiday_choice'));
+
+  let [mine] = (await app.request('get', '/api/subscriptions/me')).body;
+  assert.deepEqual(Array.from(mine.pendingHolidayChoices, (entry) => [entry.date, entry.refundAmount]), [['2026-10-21', 150], ['2026-10-22', 150]]);
+  // By default the meals move on past Friday.
+  assert.equal(mine.endDate, '2026-10-27');
+
+  const choose = (date, choice) => app.request('post', '/api/subscriptions/:id/holiday-choice', { date, choice }, { id: subId });
+  const refunded = await choose('2026-10-21', 'refund');
+  assert.equal(refunded.code, 200);
+  assert.equal(app.state().users[0].walletBalance, 150);
+  assert.equal(refunded.body.endDate, '2026-10-26');
+  assert.equal((await choose('2026-10-21', 'refund')).code, 409, 'a holiday is only settled once');
+
+  assert.equal((await choose('2026-10-22', 'carry')).code, 200);
+  [mine] = (await app.request('get', '/api/subscriptions/me')).body;
+  assert.deepEqual([...mine.pendingHolidayChoices], []);
+  assert.equal(mine.endDate, '2026-10-26');
+  assert.equal(app.state().users[0].walletBalance, 150);
 });
 
 test('weekly packages start on any day and run Monday to Saturday for 6 days', async () => {
@@ -2974,26 +3028,28 @@ test('a weekly and a monthly plan cannot cover the same meal', async () => {
   assert.match(overlap.body.error, /lunch/);
 });
 
-test('admins can add a work week package from any day', async () => {
+test('admins can add a work week package only from a Monday', async () => {
   const app = application();
-  const added = await app.request('post', '/api/admin/subscriptions', { userId: 1, itemId: 9, startDate: '2026-10-14' }, {}, adminHeaders);
+  const body = (startDate) => ({ userId: 1, itemId: 9, startDate });
+  assert.equal((await app.request('post', '/api/admin/subscriptions', body('2026-10-14'), {}, adminHeaders)).code, 400);
+  const added = await app.request('post', '/api/admin/subscriptions', body('2026-10-19'), {}, adminHeaders);
   assert.equal(added.code, 201);
   assert.equal(added.body.workingDaysRequired, 5);
-  assert.equal(added.body.endDate, '2026-10-20');
-  const moved = await app.request('patch', '/api/admin/subscriptions/:id', { startDate: '2026-10-22' }, { id: added.body.id }, adminHeaders);
-  assert.equal(moved.code, 200);
-  assert.equal(app.state().subscriptions[0].startDate, '2026-10-22');
+  assert.equal(added.body.endDate, '2026-10-23');
+  const moved = (startDate) => app.request('patch', '/api/admin/subscriptions/:id', { startDate }, { id: added.body.id }, adminHeaders);
+  assert.equal((await moved('2026-10-21')).code, 400);
+  assert.equal((await moved('2026-10-26')).code, 200);
 });
 
-test('a late work week approval starts from the next serviceable day, not a Monday', async () => {
+test('a late work week approval moves the start to the next Monday', async () => {
   const app = application();
-  const created = await purchase(app, 7);
+  const created = await purchase(app, 7, { subscriptionStartDate: '2026-10-12' });
   const id = created.body.order.id;
   await app.request('patch', '/api/orders/:id/mark-paid', {}, { id });
   await app.request('patch', '/api/admin/orders/:id/status', { status: 'paid' }, { id }, adminHeaders);
   app.clock('2026-10-13T04:00:00Z');
   await app.request('patch', '/api/admin/subscriptions/:id/approve', {}, { id: app.state().subscriptions[0].id }, adminHeaders);
-  assert.equal(app.state().subscriptions[0].startDate, '2026-10-13');
+  assert.equal(app.state().subscriptions[0].startDate, '2026-10-19');
 });
 
 async function sweep(app) {

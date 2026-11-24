@@ -1,12 +1,19 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { getMenu, getStoreConfig } from '../api';
+import { getHolidays, getMenu, getStoreConfig } from '../api';
 import { useCart } from '../context/CartContext';
 import BackToMenu from '../components/BackToMenu';
-import { isMealPackage, isMonthlyPlan, isWeeklyPlan, isWorkWeekPlan } from '../mealPlans';
+import { isMealPackage, isMonthlyPlan, isWeeklyPlan, isWorkWeekPlan, istToday } from '../mealPlans';
 import {
   availableSingleMealServices,
   boxContents,
+  closedDates,
+  defaultWorkWeekMonday,
+  holidayNote,
+  isMondayDate,
+  workWeekFor,
+  workWeekPerDay,
+  workWeekPrice,
   boxSlug,
   DAY_LONG,
   DAY_SHORT,
@@ -34,6 +41,9 @@ export default function MealBox() {
   const { section, box: slug } = useParams();
   const meta = SECTIONS[section];
   const [menu, setMenu] = useState(null);
+  const [holidays, setHolidays] = useState([]);
+  const [monday, setMonday] = useState(null);
+  const [mondayError, setMondayError] = useState('');
   const [storeConfig, setStoreConfig] = useState({ singleMealClosedToday: true });
   const [error, setError] = useState('');
   const [day, setDay] = useState(() => defaultDayIndex(meta?.days ?? 6));
@@ -45,6 +55,7 @@ export default function MealBox() {
   useEffect(() => {
     getMenu().then(setMenu).catch(() => setError('Could not load the menu.'));
     getStoreConfig().then(setStoreConfig).catch(() => {});
+    getHolidays().then(setHolidays).catch(() => {});
     const timer = setInterval(() => setClock(Date.now()), 30000);
     return () => clearInterval(timer);
   }, []);
@@ -71,7 +82,27 @@ export default function MealBox() {
   const key = makeKey(item.id, label, mealService);
   const quantity = cart.find((entry) => entry.key === key)?.quantity || 0;
   const inCart = cart.filter((entry) => entry.id === item.id).reduce((sum, entry) => sum + entry.quantity, 0);
-  const cannotAdd = storeConfig.orderingPaused || item.available === false ||
+  const isWorkWeek = section === 'workweek';
+  const closed = closedDates(holidays, storeConfig);
+  // A plan already in the cart keeps its week until it's removed.
+  const cartWeek = cart.find((entry) => entry.id === item.id && entry.startDate)?.startDate;
+  const week = isWorkWeek ? workWeekFor(cartWeek || monday || defaultWorkWeekMonday(istToday(), closed), closed) : null;
+  const fullPrice = variant?.price ?? item.price;
+  const price = week ? workWeekPrice(fullPrice, week.days.length) : fullPrice;
+  const per = (item.name.includes('+') ? 'day' : 'meal');
+  function pickMonday(value) {
+    if (!isMondayDate(value)) {
+      setMondayError('Work Week plans start on a Monday.');
+      return;
+    }
+    if (workWeekFor(value, closed).days.length === 0) {
+      setMondayError('The kitchen is closed all of that week. Choose another Monday.');
+      return;
+    }
+    setMondayError('');
+    setMonday(value);
+  }
+  const cannotAdd = storeConfig.orderingPaused || item.available === false || (week && week.days.length === 0) ||
     (item.remainingStock != null && inCart >= item.remainingStock) ||
     (isSingle && !mealService) ||
     (isMealPackage(item) && inCart >= 1);
@@ -128,7 +159,17 @@ export default function MealBox() {
       </div>
 
       <div className="meal-box-order">
-        <p className="menu-price">₹{variant?.price ?? item.price} / {meta.unit}</p>
+        <p className="menu-price">₹{price} / {week ? `${week.days.length} day${week.days.length === 1 ? '' : 's'}` : meta.unit}</p>
+        {week && (
+          <div className="work-week-picker">
+            <label>
+              Starts on Monday
+              <input type="date" value={week.monday} min={istToday()} step={7} disabled={Boolean(cartWeek)} onChange={(event) => pickMonday(event.target.value)} />
+            </label>
+            {mondayError && <p className="status-text error">{mondayError}</p>}
+            {week.holidays.length > 0 && <p className="holiday-note">{holidayNote(week.holidays, fullPrice, workWeekPerDay(fullPrice), per)}</p>}
+          </div>
+        )}
         {isSingle ? (
           services.length === 0 ? (
             <p className="status-text error">
@@ -157,12 +198,12 @@ export default function MealBox() {
         )}
         <div className="meal-box-actions">
           {item.available === false ? <span className="status-text">Unavailable</span> : quantity === 0 ? (
-            <button className="btn-add" disabled={cannotAdd} onClick={() => addItem(item, label, mealService)}>Add</button>
+            <button className="btn-add" disabled={cannotAdd} onClick={() => addItem(item, label, mealService, week ? { startDate: week.monday, days: week.days.length } : undefined)}>Add</button>
           ) : (
             <div className="qty-control">
               <button onClick={() => decreaseItem(key)}>−</button>
               <span>{quantity}</span>
-              <button disabled={cannotAdd} onClick={() => addItem(item, label, mealService)}>+</button>
+              <button disabled={cannotAdd} onClick={() => addItem(item, label, mealService, week ? { startDate: week.monday, days: week.days.length } : undefined)}>+</button>
             </div>
           )}
           {count > 0 && <Link to="/checkout" className="meal-box-cart-link">{count} item{count > 1 ? 's' : ''} · ₹{total} · View Cart →</Link>}

@@ -332,7 +332,7 @@ export default function Menu() {
                 onSelectPlan: setSelectedWorkWeekPlanId,
                 title: 'Work Week Plan',
                 description: 'Choose Lunch, Dinner, or both for 5 days.',
-                note: 'Monday to Friday · start any day · no skips',
+                note: 'Monday to Friday · starts on a Monday · no skips',
                 unit: '5 days',
                 section: 'workweek'
               })}

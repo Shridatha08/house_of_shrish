@@ -933,6 +933,39 @@ function mealPlanKind(name) {
   return null;
 }
 
+// A Work Week plan covers one Monday–Friday week. Holidays already set for
+// that week are not sold: the customer pays a per-day share for the rest.
+const WORK_WEEK_DAYS = 5;
+
+function isMonday(dateStr) {
+  return isValidDateString(dateStr) && new Date(`${dateStr}T00:00:00Z`).getUTCDay() === 1;
+}
+
+/// Today when it is a Monday, otherwise the coming Monday (IST).
+function nextMondayIST() {
+  const cursor = new Date(`${todayISTStr()}T00:00:00Z`);
+  while (cursor.getUTCDay() !== 1) cursor.setUTCDate(cursor.getUTCDate() + 1);
+  return cursor.toISOString().slice(0, 10);
+}
+
+function workWeekDates(monday) {
+  const cursor = new Date(`${monday}T00:00:00Z`);
+  return Array.from({ length: WORK_WEEK_DAYS }, () => {
+    const date = cursor.toISOString().slice(0, 10);
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+    return date;
+  });
+}
+
+function workWeekPerDay(fullPrice) {
+  return Math.round(Number(fullPrice) / WORK_WEEK_DAYS);
+}
+
+// A full week keeps the listed price, so rounding never charges ₹690 for ₹689.
+function workWeekPrice(fullPrice, days) {
+  return days >= WORK_WEEK_DAYS ? Number(fullPrice) : workWeekPerDay(fullPrice) * days;
+}
+
 function isShortPlan(kind) {
   return kind === 'workweek' || kind === 'weekly';
 }
@@ -1079,7 +1112,9 @@ function buildSubscriptionSchedule(subscription, holidays) {
   const remainingMeals = upcomingEntries.length;
   const mealsBeyondDeadline = Math.max(0, requiredMeals - scheduledMeals);
   if (mealsBeyondDeadline > 0) endDate = carryForwardDeadline;
+  const expired = Boolean(endDate) && endDate < today;
   return {
+    pendingHolidayChoices: expired || remainingMeals === 0 ? [] : pendingHolidayChoices(subscription, holidays),
     plan,
     skippable: !weekly,
     mealSlots,
@@ -1091,8 +1126,19 @@ function buildSubscriptionSchedule(subscription, holidays) {
     daysRemaining,
     remainingMeals,
     expiresToday: endDate === today,
-    expired: Boolean(endDate) && endDate < today
+    expired
   };
+}
+
+// Holidays added to a Work Week plan's week after it was paid for. Each one
+// already moves its meal on; the customer may take a wallet refund instead.
+function pendingHolidayChoices(subscription, holidays) {
+  if (subscriptionPlanKind(subscription) !== 'workweek' || !subscription.perDayPrice || !isMonday(subscription.startDate)) return [];
+  const known = new Set(subscription.knownHolidayDates || []);
+  const decided = new Set((subscription.holidayChoices || []).map((entry) => entry.date));
+  return workWeekDates(subscription.startDate)
+    .filter((date) => !isWorkingDay(date, holidays, true) && !known.has(date) && !decided.has(date))
+    .map((date) => ({ date, refundAmount: subscription.perDayPrice }));
 }
 
 // Counts a date as a working day when it isn't a Sunday and isn't an admin-added holiday.
@@ -1919,6 +1965,18 @@ app.post('/api/holidays', async (req, res) => {
   const holiday = { id: Date.now(), date, name: name.trim() };
   db.data.holidays.push(holiday);
   await db.write();
+
+  // Work Week customers already paid for this day; tell them they can choose.
+  const affected = db.data.subscriptions.filter((subscription) =>
+    subscription.approved && subscriptionInService(subscription, db.data) &&
+    pendingHolidayChoices(subscription, subscriptionHolidays(db.data)).some((entry) => entry.date === date));
+  for (const subscription of affected) {
+    await notifyUser(db, subscription.userId, {
+      title: 'Kitchen holiday in your Work Week',
+      body: `${holiday.name} on ${date}: we'll move that meal to the next working day, or you can take a wallet refund in the app.`,
+      data: { type: 'holiday_choice', subscriptionId: subscription.id }
+    });
+  }
   res.status(201).json(holiday);
 });
 
@@ -2004,6 +2062,32 @@ app.get('/api/subscriptions/me', async (req, res) => {
     .map((subscription) => ({ ...subscription, ...buildSubscriptionSchedule(subscription, subscriptionHolidays(db.data)) }));
 
   res.json(result);
+});
+
+// POST /api/subscriptions/:id/holiday-choice - carry a holiday's meal forward, or refund it to the wallet
+app.post('/api/subscriptions/:id/holiday-choice', async (req, res) => {
+  const db = await getDb();
+  const user = await getUserFromToken(db, req);
+  if (!user) return res.status(401).json({ error: 'Not signed in.' });
+  const subscription = db.data.subscriptions.find((entry) => entry.id === req.params.id && entry.userId === user.id);
+  if (!subscription || !subscription.approved) return res.status(404).json({ error: 'Active subscription not found.' });
+  const { date, choice } = req.body || {};
+  if (!['carry', 'refund'].includes(choice)) return res.status(400).json({ error: 'Choose carry forward or refund.' });
+  const holidays = subscriptionHolidays(db.data);
+  const schedule = buildSubscriptionSchedule(subscription, holidays);
+  const pending = schedule.pendingHolidayChoices.find((entry) => entry.date === date);
+  if (!pending) return res.status(409).json({ error: 'That holiday has already been sorted out.' });
+
+  subscription.holidayChoices ||= [];
+  if (choice === 'refund') {
+    subscription.workingDaysRequired = Math.max(0, Number(subscription.workingDaysRequired) - 1);
+    recordWallet(db.data, user.id, pending.refundAmount, 'holiday_refund', { subscriptionId: subscription.id, date });
+    subscription.holidayChoices.push({ date, choice, amount: pending.refundAmount, at: new Date().toISOString() });
+  } else {
+    subscription.holidayChoices.push({ date, choice, at: new Date().toISOString() });
+  }
+  await db.write();
+  res.json({ ...subscription, ...buildSubscriptionSchedule(subscription, holidays) });
 });
 
 // POST /api/subscriptions/:id/skip - cancel one meal and carry it forward
@@ -2163,6 +2247,12 @@ app.post('/api/admin/subscriptions', async (req, res) => {
     return res.status(400).json({ error: 'Choose a monthly, weekly or work week package.' });
   }
   if (!isValidDateString(startDate)) return res.status(400).json({ error: 'Start date must be a valid YYYY-MM-DD date.' });
+  const workWeek = mealPlanKind(menuItem.name) === 'workweek';
+  if (workWeek && !isMonday(startDate)) return res.status(400).json({ error: 'Work Week plans start on a Monday.' });
+  const holidays = subscriptionHolidays(db.data);
+  const weekDates = workWeek ? workWeekDates(startDate) : [];
+  const serviceDates = weekDates.filter((date) => isWorkingDay(date, holidays, true));
+  if (workWeek && serviceDates.length === 0) return res.status(400).json({ error: 'The kitchen is closed all of that week. Choose another Monday.' });
   const coverageConflict = planCoverageConflict(db.data, user.id, [menuItem]);
   if (coverageConflict) return res.status(409).json({ error: coverageConflict });
 
@@ -2175,7 +2265,12 @@ app.post('/api/admin/subscriptions', async (req, res) => {
     customisation: menuItem.variants?.[0]?.label || menuItem.customisations?.[0] || '',
     mealSlots: getSubscriptionMealSlots(menuItem.name),
     startDate,
-    workingDaysRequired: planWorkingDays(menuItem.name, getSettings(db.data)),
+    workingDaysRequired: workWeek ? serviceDates.length : planWorkingDays(menuItem.name, getSettings(db.data)),
+    ...(workWeek ? {
+      perDayPrice: workWeekPerDay(menuItem.variants?.[0]?.price ?? menuItem.price),
+      knownHolidayDates: weekDates.filter((date) => !serviceDates.includes(date)),
+      holidayChoices: []
+    } : {}),
     skippedMeals: [],
     approved: true,
     source: 'admin_manual',
@@ -2204,6 +2299,9 @@ app.patch('/api/admin/subscriptions/:id', async (req, res) => {
   if (startDate !== undefined) {
     if (!isValidDateString(startDate)) {
       return res.status(400).json({ error: 'Start date must be in YYYY-MM-DD format.' });
+    }
+    if (subscriptionPlanKind(subscription) === 'workweek' && !isMonday(startDate)) {
+      return res.status(400).json({ error: 'Work Week plans start on a Monday.' });
     }
     subscription.startDate = startDate;
   }
@@ -2332,8 +2430,19 @@ app.patch('/api/admin/subscriptions/:id/approve', async (req, res) => {
     const slots = getSubscriptionMealSlots(subscription.itemName);
     const start = new Date(`${today}T00:00:00Z`);
     if (slots.some((meal) => !canCancelSubscriptionMeal(today, meal))) start.setUTCDate(start.getUTCDate() + 1);
+    const workWeek = subscriptionPlanKind(subscription) === 'workweek';
+    // A Work Week plan runs Monday to Friday, so a late approval moves it to
+    // the next Monday rather than starting mid-week.
+    if (workWeek) {
+      while (start.getUTCDay() !== 1) start.setUTCDate(start.getUTCDate() + 1);
+    }
     const earliestDate = start.toISOString().slice(0, 10);
-    if (subscription.startDate < earliestDate) subscription.startDate = earliestDate;
+    if (subscription.startDate < earliestDate) {
+      subscription.startDate = earliestDate;
+      // Holidays in the new week weren't priced in, so each one is the
+      // customer's to carry forward or refund.
+      if (workWeek) subscription.knownHolidayDates = [];
+    }
     subscription.approvedAt = new Date().toISOString();
   }
   subscription.approved = true;
@@ -2770,6 +2879,7 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
 
   let total = 0;
   const orderItems = [];
+  const workWeekLines = new Map();
   for (const line of items) {
     const menuItem = menuById.get(Number(line.id));
     const quantity = Number(line.quantity);
@@ -2807,6 +2917,26 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
         ? line.mealService || mealService
         : mealService
       : null;
+    let workWeek = null;
+    if (mealPlanKind(menuItem.name) === 'workweek') {
+      const monday = line.startDate ?? subscriptionStartDate ?? nextMondayIST();
+      if (!isMonday(monday) || monday < todayISTStr()) {
+        return res.status(400).json({ error: 'Work Week plans start on a Monday. Choose a Monday from today onward.' });
+      }
+      const holidays = subscriptionHolidays(db.data);
+      const dates = workWeekDates(monday);
+      const serviceDates = dates.filter((date) => isWorkingDay(date, holidays, true));
+      if (serviceDates.length === 0) {
+        return res.status(400).json({ error: 'The kitchen is closed all of that week. Choose another Monday.' });
+      }
+      workWeek = {
+        startDate: monday,
+        days: serviceDates.length,
+        perDayPrice: workWeekPerDay(unitPrice),
+        knownHolidayDates: dates.filter((date) => !serviceDates.includes(date) && new Date(`${date}T00:00:00Z`).getUTCDay() !== 0)
+      };
+      unitPrice = workWeekPrice(unitPrice, workWeek.days);
+    }
     const portionCount = lineMealService === 'both' ? 2 : 1;
     const orderPrice = unitPrice * portionCount;
     total += orderPrice * quantity;
@@ -2816,8 +2946,10 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
       price: orderPrice,
       quantity,
       customisation,
-      ...(lineMealService ? { mealService: lineMealService } : {})
+      ...(lineMealService ? { mealService: lineMealService } : {}),
+      ...(workWeek ? { startDate: workWeek.startDate, days: workWeek.days } : {})
     });
+    if (workWeek) workWeekLines.set(menuItem.id, workWeek);
   }
 
   const requestedMealServices = new Set(orderItems.flatMap((item) =>
@@ -2902,6 +3034,7 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
     const startDate = preferredStartDate;
     for (const item of orderItems) {
       if (isMealPlan(item.name)) {
+        const workWeek = workWeekLines.get(item.id);
         db.data.subscriptions.push({
           id: `${order.id}-${item.id}`,
           userId: user.id,
@@ -2910,8 +3043,9 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
           planKind: mealPlanKind(item.name),
           customisation: item.customisation,
           mealSlots: getSubscriptionMealSlots(item.name),
-          startDate,
-          workingDaysRequired: planWorkingDays(item.name, settings),
+          startDate: workWeek ? workWeek.startDate : startDate,
+          workingDaysRequired: workWeek ? workWeek.days : planWorkingDays(item.name, settings),
+          ...(workWeek ? { perDayPrice: workWeek.perDayPrice, knownHolidayDates: workWeek.knownHolidayDates, holidayChoices: [] } : {}),
           skippedMeals: [],
           approved: false,
           createdAt: new Date().toISOString()

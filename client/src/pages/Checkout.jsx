@@ -8,7 +8,7 @@ import { walletSplit } from '../wallet';
 import { CGST_RATE, SGST_RATE, formatRupees, gstBreakdown } from '../gst';
 import LocationPicker from '../components/LocationPicker';
 import { dryFruitsLadooDeliveryCharge, ladooDeliveryNote } from '../delivery';
-import { isMealPackage } from '../mealPlans';
+import { isMealPackage, isWorkWeekPlan } from '../mealPlans';
 
 const DEFAULT_DELIVERY_CONFIG = {
   kitchenLat: 12.9744129,
@@ -78,6 +78,8 @@ export default function Checkout() {
   const split = walletSplit({ total: totalWithDelivery, balance: walletBalance, useWallet });
 
   const requiresAccount = items.some(isMealPackage);
+  // Work Week plans carry their own Monday; other plans use the date chosen here.
+  const needsStartDate = items.some((item) => isMealPackage(item) && !isWorkWeekPlan(item));
   const earliestStartDate = todayIST();
   const subscriptionStartDate = chosenStartDate || earliestStartDate;
   const blockedByAuth = requiresAccount && !user;
@@ -123,7 +125,7 @@ export default function Checkout() {
       setError('Please sign up or log in to order meal packages.');
       return;
     }
-    if (requiresAccount && (!subscriptionStartDate || subscriptionStartDate < todayIST())) {
+    if (needsStartDate && (!subscriptionStartDate || subscriptionStartDate < todayIST())) {
       setError('Choose a subscription start date from today onward.');
       return;
     }
@@ -152,7 +154,8 @@ export default function Checkout() {
             id: i.id,
             quantity: i.quantity,
             customisation: i.customisation,
-            ...(i.mealService ? { mealService: i.mealService } : {})
+            ...(i.mealService ? { mealService: i.mealService } : {}),
+            ...(i.startDate ? { startDate: i.startDate } : {})
           })),
           customer: {
             name,
@@ -163,7 +166,7 @@ export default function Checkout() {
             lat: position?.lat ?? null,
             lng: position?.lng ?? null
           },
-          ...(requiresAccount ? { subscriptionStartDate } : {}),
+          ...(needsStartDate ? { subscriptionStartDate } : {}),
           ...(useWallet ? { useWallet: true } : {})
         },
         token
@@ -190,6 +193,12 @@ export default function Checkout() {
               <span className="cart-row-name">
                 {item.name}
                 {item.customisation && <span className="cart-row-note">{item.customisation}</span>}
+                {item.startDate && (
+                  <span className="cart-row-note">
+                    Week of {new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' }).format(new Date(`${item.startDate}T00:00:00Z`))}
+                    {item.days < 5 ? ` · ${item.days} days` : ''}
+                  </span>
+                )}
                 {item.mealService && (
                   <span className="cart-row-note">
                     {item.mealService === 'both'
@@ -298,7 +307,7 @@ export default function Checkout() {
           Pincode
           <input value={pincode} onChange={(event) => setPincode(event.target.value)} inputMode="numeric" pattern="[1-9][0-9]{5}" maxLength={6} autoComplete="postal-code" required />
         </label>
-        {requiresAccount && (
+        {needsStartDate && (
           <label>
             Preferred subscription start date (IST)
             <input
