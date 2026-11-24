@@ -30,12 +30,14 @@ function priceOf(item, option) {
 }
 
 // Image-and-name tiles for each meal box; prices and the menu live on the box page.
+const HEADING_NOTES = { workweek: '5 days, Mon–Fri', weekly: '6 days, start any day' };
+
 function BoxSection({ title, section, item }) {
   return (
     <div className="box-section">
       <div className="menu-card-heading">
         <span className="veg-badge" title="Pure Veg" />
-        <h3>{title}</h3>
+        <h3>{HEADING_NOTES[section] ? `${title} (${HEADING_NOTES[section]})` : title}</h3>
       </div>
       <div className="box-tiles">
         {item.variants.map((variant) => {
