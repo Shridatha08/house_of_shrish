@@ -78,8 +78,9 @@ export default function Checkout() {
   const split = walletSplit({ total: totalWithDelivery, balance: walletBalance, useWallet });
 
   const requiresAccount = items.some(isMealPackage);
-  // Work Week plans carry their own Monday; other plans use the date chosen here.
-  const needsStartDate = items.some((item) => isMealPackage(item) && !isWorkWeekPlan(item));
+  // Plans carry the start date chosen on the menu; only older cart lines
+  // without one use the date picked here.
+  const needsStartDate = items.some((item) => isMealPackage(item) && !item.startDate);
   const earliestStartDate = todayIST();
   const subscriptionStartDate = chosenStartDate || earliestStartDate;
   const blockedByAuth = requiresAccount && !user;
@@ -195,7 +196,7 @@ export default function Checkout() {
                 {item.customisation && <span className="cart-row-note">{item.customisation}</span>}
                 {item.startDate && (
                   <span className="cart-row-note">
-                    Week of {new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' }).format(new Date(`${item.startDate}T00:00:00Z`))}
+                    {isWorkWeekPlan(item) ? 'Week of' : 'Starts'} {new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' }).format(new Date(`${item.startDate}T00:00:00Z`))}
                     {item.days < 5 ? ` · ${item.days} days` : ''}
                   </span>
                 )}

@@ -589,44 +589,6 @@ test('future preferred start dates are stored, invalid/past dates rejected', asy
   assert.equal(app.state().subscriptions[0].startDate, '2026-11-01');
 });
 
-test('existing monthly coverage permits only the missing meal', async () => {
-  for (const [existingPlan, allowed, blocked] of [
-    ['Monthly (Lunch)', [3], [2, 4]],
-    ['Monthly (Dinner)', [2], [3, 4]],
-    ['Monthly (Lunch + Dinner)', [], [2, 3, 4]]
-  ]) {
-    for (const itemId of [...allowed, ...blocked]) {
-      const data = fixture();
-      data.menu.push({ id: 3, name: 'Monthly (Dinner)', category: 'Pure Veg Meals', price: 3299, customisations: ['Meal A'] });
-      data.subscriptions.push({ id: 'existing', userId: 1, approved: true, itemName: existingPlan, startDate: '2026-10-10', workingDaysRequired: 26 });
-      const result = await purchase(application(data), itemId);
-      assert.equal(result.code, allowed.includes(itemId) ? 201 : 409, `${existingPlan}: requested ${itemId}`);
-    }
-  }
-});
-
-test('pending monthly purchase blocks repeat coverage but cancellation or expiry releases it', async () => {
-  const app = application();
-  const created = await purchase(app, 2);
-  assert.equal((await purchase(app, 2)).code, 409);
-  await app.request('patch', '/api/orders/:id/cancel', {}, { id: created.body.order.id });
-  assert.equal((await purchase(app, 2)).code, 201);
-  app.clock('2026-10-10T04:31:00Z');
-  assert.equal((await purchase(app, 2)).code, 201);
-});
-
-test('duplicate meal coverage inside one cart and manual enrollment are rejected', async () => {
-  const app = application();
-  const duplicate = await purchase(app, 2, { items: [
-    { id: 2, quantity: 1, customisation: 'Meal A' },
-    { id: 4, quantity: 1, customisation: 'Meal A' }
-  ] });
-  assert.equal(duplicate.code, 409);
-  const manual = { userId: 1, itemId: 2, startDate: '2026-10-10' };
-  assert.equal((await app.request('post', '/api/admin/subscriptions', manual, {}, adminHeaders)).code, 201);
-  assert.equal((await app.request('post', '/api/admin/subscriptions', manual, {}, adminHeaders)).code, 409);
-});
-
 test('expired subscriptions do not block a new monthly purchase', async () => {
   const data = fixture();
   data.subscriptions.push({ id: 'old', userId: 1, approved: true, itemName: 'Monthly (Lunch + Dinner)', startDate: '2026-09-01', workingDaysRequired: 1 });
@@ -3020,12 +2982,25 @@ test('customers cannot skip weekly meals', async () => {
   assert.equal(app.state().subscriptions[0].skippedMeals.length, 0);
 });
 
-test('a weekly and a monthly plan cannot cover the same meal', async () => {
+test('customers may hold several plans for the same meal, each with its own start date', async () => {
   const app = application();
-  await approvedWeekly(app);
-  const overlap = await purchase(app, 2, { subscriptionStartDate: '2026-10-12' });
-  assert.equal(overlap.code, 409);
-  assert.match(overlap.body.error, /lunch/);
+  await approvedWeekly(app, 7, { subscriptionStartDate: '2026-10-12' });
+  const both = await app.request('post', '/api/orders', {
+    items: [
+      { id: 2, quantity: 1, customisation: 'Meal A', startDate: '2026-10-14' },
+      { id: 10, quantity: 1, customisation: 'Meal A', startDate: '2026-10-15' }
+    ],
+    customer
+  });
+  assert.equal(both.code, 201);
+  assert.deepEqual(Array.from(both.body.order.items, (item) => item.startDate), ['2026-10-14', '2026-10-15']);
+  const starts = app.state().subscriptions.slice(1).map((entry) => entry.startDate);
+  assert.deepEqual(starts, ['2026-10-14', '2026-10-15']);
+
+  const past = await app.request('post', '/api/orders', {
+    items: [{ id: 4, quantity: 1, customisation: 'Meal A', startDate: '2026-10-01' }], customer
+  });
+  assert.equal(past.code, 400);
 });
 
 test('admins can add a work week package only from a Monday', async () => {

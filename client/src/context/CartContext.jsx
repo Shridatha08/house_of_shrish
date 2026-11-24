@@ -22,12 +22,13 @@ export function CartProvider({ children }) {
     sessionStorage.setItem('houseOfShrishCart', JSON.stringify(items));
   }, [items]);
 
-  // `week` is a Work Week plan's { startDate, days }, which set its price.
-  function addItem(menuItem, customisation, mealService, week) {
+  // `plan` is a package's { startDate }, plus a Work Week's served `days`,
+  // which set its price.
+  function addItem(menuItem, customisation, mealService, plan) {
     const key = makeKey(menuItem.id, customisation, mealService);
     const variant = menuItem.variants?.find((option) => option.label === customisation);
     const fullPrice = variant?.price ?? menuItem.price;
-    const price = week ? workWeekPrice(fullPrice, week.days) : fullPrice;
+    const price = plan?.days ? workWeekPrice(fullPrice, plan.days) : fullPrice;
     setItems((prev) => {
       if (isMealPackage(menuItem) && prev.some((item) => item.id === menuItem.id)) return prev;
       const existing = prev.find((i) => i.key === key);
@@ -46,10 +47,21 @@ export function CartProvider({ children }) {
           quantity: 1,
           customisation: customisation || '',
           ...(mealService ? { mealService } : {}),
-          ...(week ? { startDate: week.startDate, days: week.days } : {})
+          ...(plan?.startDate ? { startDate: plan.startDate } : {}),
+          ...(plan?.days ? { days: plan.days, fullPrice } : {})
         }
       ];
     });
+  }
+
+  // Moves a plan in the cart to a new start date; a Work Week's price follows
+  // the days served that week.
+  function changeStart(key, startDate, days) {
+    setItems((prev) => prev.map((entry) => (entry.key !== key ? entry : {
+      ...entry,
+      startDate,
+      ...(days ? { days, price: workWeekPrice(entry.fullPrice ?? entry.price, days) } : {})
+    })));
   }
 
   function decreaseItem(key) {
@@ -74,7 +86,7 @@ export function CartProvider({ children }) {
   );
   const count = useMemo(() => items.reduce((sum, i) => sum + i.quantity, 0), [items]);
 
-  const value = { items, addItem, decreaseItem, removeItem, clearCart, total, count, makeKey };
+  const value = { items, addItem, changeStart, decreaseItem, removeItem, clearCart, total, count, makeKey };
 
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>;
 }

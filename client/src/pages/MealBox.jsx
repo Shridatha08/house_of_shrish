@@ -50,7 +50,7 @@ export default function MealBox() {
   const [planId, setPlanId] = useState(null);
   const [service, setService] = useState(null);
   const [clock, setClock] = useState(() => Date.now());
-  const { items: cart, addItem, decreaseItem, makeKey, count, total } = useCart();
+  const { items: cart, addItem, changeStart, decreaseItem, makeKey, count, total } = useCart();
 
   useEffect(() => {
     getMenu().then(setMenu).catch(() => setError('Could not load the menu.'));
@@ -85,22 +85,36 @@ export default function MealBox() {
   const isWorkWeek = section === 'workweek';
   const closed = closedDates(holidays, storeConfig);
   // A plan already in the cart keeps its week until it's removed.
-  const cartWeek = cart.find((entry) => entry.id === item.id && entry.startDate)?.startDate;
-  const week = isWorkWeek ? workWeekFor(cartWeek || monday || defaultWorkWeekMonday(istToday(), closed), closed) : null;
+  const cartLine = cart.find((entry) => entry.id === item.id && entry.startDate);
+  const week = isWorkWeek ? workWeekFor(cartLine?.startDate || monday || defaultWorkWeekMonday(istToday(), closed), closed) : null;
+  const isPlan = isMealPackage(item);
+  const startDate = week ? week.monday : cartLine?.startDate || monday || istToday();
+  // Another plan in the cart: ask before adding this one too.
+  const hasOtherPlan = cart.some((entry) => entry.id !== item.id && isMealPackage(entry));
   const fullPrice = variant?.price ?? item.price;
   const price = week ? workWeekPrice(fullPrice, week.days.length) : fullPrice;
   const per = (item.name.includes('+') ? 'day' : 'meal');
-  function pickMonday(value) {
-    if (!isMondayDate(value)) {
+  function pickStart(value) {
+    if (!value) return;
+    if (value < istToday()) {
+      setMondayError('Choose a start date from today onward.');
+      return;
+    }
+    if (isWorkWeek && !isMondayDate(value)) {
       setMondayError('Work Week plans start on a Monday.');
       return;
     }
-    if (workWeekFor(value, closed).days.length === 0) {
+    if (isWorkWeek && workWeekFor(value, closed).days.length === 0) {
       setMondayError('The kitchen is closed all of that week. Choose another Monday.');
       return;
     }
     setMondayError('');
-    setMonday(value);
+    if (cartLine) changeStart(cartLine.key, value, isWorkWeek ? workWeekFor(value, closed).days.length : undefined);
+    else setMonday(value);
+  }
+  function add() {
+    if (isPlan && quantity === 0 && hasOtherPlan && !window.confirm('You already have a subscription, do you still want to add?')) return;
+    addItem(item, label, mealService, isPlan ? { startDate, ...(week ? { days: week.days.length } : {}) } : undefined);
   }
   const cannotAdd = storeConfig.orderingPaused || item.available === false || (week && week.days.length === 0) ||
     (item.remainingStock != null && inCart >= item.remainingStock) ||
@@ -160,16 +174,7 @@ export default function MealBox() {
 
       <div className="meal-box-order">
         <p className="menu-price">₹{price} / {week ? `${week.days.length} day${week.days.length === 1 ? '' : 's'}` : meta.unit}</p>
-        {week && (
-          <div className="work-week-picker">
-            <label>
-              Starts on Monday
-              <input type="date" value={week.monday} min={istToday()} step={7} disabled={Boolean(cartWeek)} onChange={(event) => pickMonday(event.target.value)} />
-            </label>
-            {mondayError && <p className="status-text error">{mondayError}</p>}
-            {week.holidays.length > 0 && <p className="holiday-note">{holidayNote(week.holidays, fullPrice, workWeekPerDay(fullPrice), per)}</p>}
-          </div>
-        )}
+        {week && week.holidays.length > 0 && <p className="holiday-note">{holidayNote(week.holidays, fullPrice, workWeekPerDay(fullPrice), per)}</p>}
         {isSingle ? (
           services.length === 0 ? (
             <p className="status-text error">
@@ -196,14 +201,21 @@ export default function MealBox() {
             ))}
           </div>
         )}
+        {mondayError && <p className="status-text error">{mondayError}</p>}
         <div className="meal-box-actions">
+          {isPlan && (
+            <label className="start-date-chip">
+              <span>{isWorkWeek ? 'Starts (Mon)' : 'Starts'}</span>
+              <input type="date" value={startDate} min={istToday()} step={isWorkWeek ? 7 : undefined} onChange={(event) => pickStart(event.target.value)} />
+            </label>
+          )}
           {item.available === false ? <span className="status-text">Unavailable</span> : quantity === 0 ? (
-            <button className="btn-add" disabled={cannotAdd} onClick={() => addItem(item, label, mealService, week ? { startDate: week.monday, days: week.days.length } : undefined)}>Add</button>
+            <button className="btn-add" disabled={cannotAdd} onClick={add}>Add</button>
           ) : (
             <div className="qty-control">
               <button onClick={() => decreaseItem(key)}>−</button>
               <span>{quantity}</span>
-              <button disabled={cannotAdd} onClick={() => addItem(item, label, mealService, week ? { startDate: week.monday, days: week.days.length } : undefined)}>+</button>
+              <button disabled={cannotAdd} onClick={add}>+</button>
             </div>
           )}
           {count > 0 && <Link to="/checkout" className="meal-box-cart-link">{count} item{count > 1 ? 's' : ''} · ₹{total} · View Cart →</Link>}

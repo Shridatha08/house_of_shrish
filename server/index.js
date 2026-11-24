@@ -774,32 +774,6 @@ function subscriptionInService(subscription, data) {
   return Boolean(order && paymentStatus(order) === 'verified' && !['cancelled', 'refund_requested', 'refunded'].includes(order.status));
 }
 
-function subscriptionCoverage(data, userId) {
-  const covered = new Set();
-  for (const subscription of data.subscriptions) {
-    if (subscription.userId !== userId || subscription.deactivated) continue;
-    if (subscription.orderId) {
-      const order = data.orders.find((entry) => entry.id === subscription.orderId);
-      if (!order || !reservesStock(order)) continue;
-    } else if (!subscription.approved) continue;
-    const schedule = buildSubscriptionSchedule(subscription, subscriptionHolidays(data));
-    if (!schedule.endDate || schedule.endDate < todayISTStr()) continue;
-    for (const meal of schedule.mealSlots) covered.add(meal);
-  }
-  return covered;
-}
-
-function planCoverageConflict(data, userId, monthlyItems) {
-  const covered = subscriptionCoverage(data, userId);
-  for (const item of monthlyItems) {
-    const meals = getSubscriptionMealSlots(item.name);
-    const conflict = meals.find((meal) => covered.has(meal));
-    if (conflict) return `You already have an active or pending ${conflict} subscription. Choose only a meal you do not have.`;
-    for (const meal of meals) covered.add(meal);
-  }
-  return null;
-}
-
 function stockUsed(data, date, itemId) {
   return data.orders.filter((order) => reservesStock(order) && businessDate(order.createdAt) === date)
     .reduce((total, order) => total + order.items.filter((item) => item.id === itemId)
@@ -2253,8 +2227,6 @@ app.post('/api/admin/subscriptions', async (req, res) => {
   const weekDates = workWeek ? workWeekDates(startDate) : [];
   const serviceDates = weekDates.filter((date) => isWorkingDay(date, holidays, true));
   if (workWeek && serviceDates.length === 0) return res.status(400).json({ error: 'The kitchen is closed all of that week. Choose another Monday.' });
-  const coverageConflict = planCoverageConflict(db.data, user.id, [menuItem]);
-  if (coverageConflict) return res.status(409).json({ error: coverageConflict });
 
   const subscription = {
     id: crypto.randomBytes(12).toString('hex'),
@@ -2866,12 +2838,6 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
   if (requiresAccount && !user) {
     return res.status(401).json({ error: 'Please sign up or log in to order meal packages.' });
   }
-  if (requiresAccount) {
-    const monthlyItems = items.map((line) => menuById.get(Number(line.id)))
-      .filter((item) => item && isMealPlan(item.name));
-    const coverageConflict = planCoverageConflict(db.data, user.id, monthlyItems);
-    if (coverageConflict) return res.status(409).json({ error: coverageConflict });
-  }
   const preferredStartDate = subscriptionStartDate ?? todayISTStr();
   if (requiresAccount && (!isValidDateString(preferredStartDate) || preferredStartDate < todayISTStr())) {
     return res.status(400).json({ error: 'Choose a valid subscription start date from today onward (IST).' });
@@ -2937,6 +2903,14 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
       };
       unitPrice = workWeekPrice(unitPrice, workWeek.days);
     }
+    // Each plan may carry its own start date; older clients send one per order.
+    let planStart = workWeek?.startDate ?? null;
+    if (!workWeek && isMealPlan(menuItem.name)) {
+      planStart = line.startDate ?? preferredStartDate;
+      if (!isValidDateString(planStart) || planStart < todayISTStr()) {
+        return res.status(400).json({ error: `Choose a start date from today onward for ${menuItem.name}.` });
+      }
+    }
     const portionCount = lineMealService === 'both' ? 2 : 1;
     const orderPrice = unitPrice * portionCount;
     total += orderPrice * quantity;
@@ -2947,7 +2921,8 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
       quantity,
       customisation,
       ...(lineMealService ? { mealService: lineMealService } : {}),
-      ...(workWeek ? { startDate: workWeek.startDate, days: workWeek.days } : {})
+      ...(planStart ? { startDate: planStart } : {}),
+      ...(workWeek ? { days: workWeek.days } : {})
     });
     if (workWeek) workWeekLines.set(menuItem.id, workWeek);
   }
@@ -3043,7 +3018,7 @@ app.post('/api/orders', orderRateLimit, async (req, res) => {
           planKind: mealPlanKind(item.name),
           customisation: item.customisation,
           mealSlots: getSubscriptionMealSlots(item.name),
-          startDate: workWeek ? workWeek.startDate : startDate,
+          startDate: item.startDate ?? startDate,
           workingDaysRequired: workWeek ? workWeek.days : planWorkingDays(item.name, settings),
           ...(workWeek ? { perDayPrice: workWeek.perDayPrice, knownHolidayDates: workWeek.knownHolidayDates, holidayChoices: [] } : {}),
           skippedMeals: [],
