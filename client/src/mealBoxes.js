@@ -18,6 +18,13 @@ export const SECTIONS = {
   monthly: { title: 'Monthly Package', note: 'Monday to Saturday', unit: 'month', days: 6 }
 };
 
+// Skip and carry-forward rules shown under a plan's days.
+export function planRulesNote(section) {
+  if (section === 'monthly') return 'Skip and carry forward available: skipped meals move past your end date.';
+  if (section === 'workweek' || section === 'weekly') return 'No skip or carry forward, except for kitchen holidays or maintenance set by us.';
+  return null;
+}
+
 // "Royal Nourish Box" -> "royal-nourish-box", used in /box/:section/:box.
 export function boxSlug(label) {
   return String(label).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');

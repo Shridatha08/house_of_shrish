@@ -2678,3 +2678,13 @@ button.subscription-calendar-day:disabled {
   background: transparent;
   padding: 0;
 }
+
+.plan-rules {
+  margin: 4px 0 0;
+  font-size: 0.85rem;
+  color: #666;
+}
+
+.plan-rules.flexible {
+  color: #2e7d32;
+}

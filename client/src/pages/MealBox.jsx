@@ -21,7 +21,8 @@ import {
   deliveryWindow,
   dishesFor,
   SECTIONS,
-  WEEK_DAYS
+  WEEK_DAYS,
+  planRulesNote
 } from '../mealBoxes';
 import { boxImage } from '../boxImages';
 
@@ -132,6 +133,7 @@ export default function MealBox() {
 
       <h1 className="meal-box-title">{label}</h1>
       <p className="meal-box-section">{meta.title}{meta.note ? ` · ${meta.note}` : ''}</p>
+      {planRulesNote(section) && <p className={section === 'monthly' ? 'plan-rules flexible' : 'plan-rules'}>{planRulesNote(section)}</p>}
       {variant?.description && <p className="menu-desc">{variant.description}</p>}
 
       <p className="meal-box-kicker">Choose day to preview</p>
